@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"github.com/Maverick-sst/OpenCompute/internal/batch"
 	"sync"
 	"time"
@@ -74,6 +75,8 @@ type Store interface {
 	Heartbeat(string) (Worker, error)
 	LeaseNext(string, time.Duration) (Lease, error)
 	CompleteLease(string, string, uint64, BatchResult) (Job, error)
+	ListJobs() []Job
+	ListWorkers() []Worker
 }
 type MemoryStore struct {
 	mu      sync.Mutex
