@@ -6,12 +6,14 @@
 - [x] Coordinator health endpoint
 - [x] Job submission and lookup
 - [x] Deterministic batch partitioning
-- [ ] Persistent job store
-- [ ] Worker registration and heartbeat
-- [ ] Lease creation, expiry, and fencing tokens
-- [ ] Worker polling and result reporting
-- [ ] Retry and failed-worker recovery
-- [ ] Dashboard and live job view
+- [x] Atomic local JSON persistence for one coordinator process
+- [x] Worker registration and heartbeat
+- [x] Lease creation, expiry, and fencing tokens
+- [x] Worker polling and result reporting
+- [x] Expired-lease recovery and stale completion rejection
+- [x] Dashboard and live job view (initial control panel)
+- [ ] Multi-replica durable database and scheduler
+- [ ] Worker credentials, TLS deployment, and stronger identity
 
 ## First experiment: one million records
 
