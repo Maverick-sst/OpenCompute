@@ -21,7 +21,7 @@ OCF_STATE_PATH=./data/ocf-state.json go run ./cmd/coordinator
 Terminal 2:
 
 ```bash
-go run ./cmd/worker -coordinator http://127.0.0.1:8080 -name laptop-worker
+go run ./cmd/worker -coordinator http://127.0.0.1:8080 -name laptop-worker -memory-mb 4096
 ```
 
 Submit one million synthetic records:
