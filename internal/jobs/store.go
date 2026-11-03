@@ -252,6 +252,38 @@ func (s *MemoryStore) CompleteLease(workerID, leaseID string, token uint64, resu
 	return Job{}, ErrLeaseNotFound
 }
 
+func (s *MemoryStore) ListJobs() []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		out = append(out, cloneJob(job))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
+func (s *MemoryStore) ListWorkers() []Worker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Worker, 0, len(s.workers))
+	for _, worker := range s.workers {
+		out = append(out, worker)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RegisteredAt.Equal(out[j].RegisteredAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].RegisteredAt.Before(out[j].RegisteredAt)
+	})
+	return out
+}
+
 func cloneJob(j *Job) Job {
 	c := *j
 	c.Batches = append([]BatchTask(nil), j.Batches...)
