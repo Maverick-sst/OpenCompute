@@ -8,20 +8,22 @@ import (
  "fmt"
  "log"
  "net/http"
+ "os"
  "runtime"
  "time"
 )
 
-type worker struct{base,id string;client *http.Client}
+type worker struct{base,id,token string;client *http.Client}
 type lease struct{ID string `json:"id"`;JobID string `json:"job_id"`;Batch struct{Index int `json:"index"`;Start int64 `json:"start"`;End int64 `json:"end"`} `json:"batch"`;FencingToken uint64 `json:"fencing_token"`}
 func main(){
  base:=flag.String("coordinator","http://127.0.0.1:8080","Coordinator URL")
  name:=flag.String("name","local-worker","Worker name")
+ token:=flag.String("token",os.Getenv("OCF_API_TOKEN"),"Coordinator bearer token (or OCF_API_TOKEN)")
  flag.Parse()
  var registered struct{ID string `json:"id"`;Name string `json:"name"`}
- err:=request(http.MethodPost,*base+"/api/v1/workers",map[string]any{"name":*name,"cpu_cores":runtime.NumCPU(),"memory_mb":1024},&registered)
+ err:=request(http.MethodPost,*base+"/api/v1/workers",map[string]any{"name":*name,"cpu_cores":runtime.NumCPU(),"memory_mb":1024},*token,&registered)
  if err!=nil{log.Fatal(err)}
- w:=worker{base:*base,id:registered.ID,client:&http.Client{Timeout:10*time.Second}}
+ w:=worker{base:*base,id:registered.ID,token:*token,client:&http.Client{Timeout:10*time.Second}}
  log.Printf("worker registered: %s (%s)",registered.Name,registered.ID)
  for{
   if err:=w.heartbeat();err!=nil{log.Printf("heartbeat: %v",err);time.Sleep(time.Second);continue}
@@ -37,6 +39,7 @@ var errNoWork=fmt.Errorf("no work available")
 func(w *worker)heartbeat()error{return w.do(http.MethodPost,"/api/v1/workers/"+w.id+"/heartbeat",nil,nil)}
 func(w *worker)next()(lease,error){
  req,_:=http.NewRequestWithContext(context.Background(),http.MethodPost,w.base+"/api/v1/workers/"+w.id+"/leases",nil)
+ if w.token!=""{req.Header.Set("Authorization","Bearer "+w.token)}
  resp,err:=w.client.Do(req);if err!=nil{return lease{},err};defer resp.Body.Close()
  if resp.StatusCode==http.StatusNoContent{return lease{},errNoWork}
  if resp.StatusCode!=http.StatusOK{return lease{},fmt.Errorf("coordinator returned %s",resp.Status)}
@@ -46,14 +49,14 @@ func(w *worker)do(method,path string,payload,out any)error{
  var body *bytes.Reader
  if payload==nil{body=bytes.NewReader(nil)}else{b,err:=json.Marshal(payload);if err!=nil{return err};body=bytes.NewReader(b)}
  req,err:=http.NewRequestWithContext(context.Background(),method,w.base+path,body);if err!=nil{return err}
- if payload!=nil{req.Header.Set("Content-Type","application/json")}
+ if payload!=nil{req.Header.Set("Content-Type","application/json")};if w.token!=""{req.Header.Set("Authorization","Bearer "+w.token)}
  resp,err:=w.client.Do(req);if err!=nil{return err};defer resp.Body.Close()
  if resp.StatusCode<200||resp.StatusCode>=300{return fmt.Errorf("coordinator returned %s",resp.Status)}
  if out!=nil{return json.NewDecoder(resp.Body).Decode(out)};return nil
 }
-func request(method,url string,payload,out any)error{
+func request(method,url string,payload any,token string,out any)error{
  b,err:=json.Marshal(payload);if err!=nil{return err}
- req,err:=http.NewRequest(method,url,bytes.NewReader(b));if err!=nil{return err};req.Header.Set("Content-Type","application/json")
+ req,err:=http.NewRequest(method,url,bytes.NewReader(b));if err!=nil{return err};req.Header.Set("Content-Type","application/json");if token!=""{req.Header.Set("Authorization","Bearer "+token)}
  resp,err:=http.DefaultClient.Do(req);if err!=nil{return err};defer resp.Body.Close()
  if resp.StatusCode<200||resp.StatusCode>=300{return fmt.Errorf("coordinator returned %s",resp.Status)}
  return json.NewDecoder(resp.Body).Decode(out)
