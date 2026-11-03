@@ -19,7 +19,7 @@ An open protocol for coordinating spare compute resources across independently o
 - **Coordinator:** Go HTTP API; owns job lifecycle, workers, and leases.
 - **Worker agent:** Go process that registers, polls for leases, executes a deterministic synthetic workload, and reports results.
 - **Batch engine:** deterministic range partitioning.
-- **Storage:** in-memory for V0; restart loses all state.
+- **Storage:** atomic local JSON state file for single-process V0; set `OCF_STATE_PATH` to choose its location. Use a persistent disk; do not share the file between coordinator replicas.
 - **Execution:** synthetic code only. OCI execution is a later milestone.
 - **Dashboard:** planned.
 
@@ -31,7 +31,7 @@ Terminal 1:
 
 ```bash
 go test ./...
-go run ./cmd/coordinator
+OCF_STATE_PATH=./data/ocf-state.json go run ./cmd/coordinator
 ```
 
 Terminal 2:
