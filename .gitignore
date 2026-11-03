@@ -1,0 +1,18 @@
+# Coordinator state and local runtime data
+/data/
+/data-*/
+ocf-state.json
+*.tmp
+
+# Go build output
+/coordinator
+/worker
+
+# Frontend dependencies and build output
+/dashboard/node_modules/
+/dashboard/dist/
+
+# Local environment and logs
+.env
+.env.*
+*.log
