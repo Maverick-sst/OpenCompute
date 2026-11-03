@@ -68,7 +68,7 @@ See [docs/WORKER-PROTOCOL.md](docs/WORKER-PROTOCOL.md) and [docs/V0-ROADMAP.md](
 
 ## Security limitations
 
-Worker IDs are not authentication credentials. The API is unauthenticated and intended for trusted local development only; do not expose it to the public internet. TLS, signed worker credentials, workload sandboxing, resource enforcement, durable state, and provider trust are not implemented. Containers share the host kernel and are not a confidentiality boundary. Never send sensitive data to untrusted workers.
+Set `OCF_API_TOKEN` to require a shared bearer token on all `/api/v1/*` routes; pass the same value to the worker through `OCF_API_TOKEN` or `-token`. The coordinator refuses to bind beyond localhost without this token. This shared-token mechanism is a basic V0 access gate, not a production identity or multi-tenant trust system. TLS, signed worker credentials, workload sandboxing, resource enforcement, durable state, and provider trust are not implemented. Containers share the host kernel and are not a confidentiality boundary. Never send sensitive data to untrusted workers.
 
 ## License
 
