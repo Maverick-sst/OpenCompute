@@ -105,20 +105,63 @@ func(s *MemoryStore)Heartbeat(id string)(Worker,error){
  s.mu.Lock();defer s.mu.Unlock();w,ok:=s.workers[id];if !ok{return Worker{},ErrNotFound}
  w.LastSeenAt=time.Now().UTC();s.workers[id]=w;return w,nil
 }
-func(s *MemoryStore)LeaseNext(workerID string,d time.Duration)(Lease,error){
- s.mu.Lock();defer s.mu.Unlock();w,ok:=s.workers[workerID];if !ok{return Lease{},ErrNotFound}
- now:=time.Now().UTC();w.LastSeenAt=now;s.workers[workerID]=w
- for _,j:=range s.jobs{for i:=range j.Batches{b:=&j.Batches[i];if b.Status==BatchLeased&&!b.LeaseExpires.After(now){
-  delete(s.leases,b.LeaseID);b.Status=BatchQueued;b.LeaseID="";b.WorkerID="";b.FencingToken=0;b.LeaseExpires=time.Time{}
- }}}
- for _,j:=range s.jobs{for i:=range j.Batches{b:=&j.Batches[i];if b.Status!=BatchQueued{continue}
-  id,err:=newID();if err!=nil{return Lease{},err};s.fence++;expires:=now.Add(d)
-  b.Status=BatchLeased;b.LeaseID=id;b.WorkerID=workerID;b.FencingToken=s.fence;b.LeaseExpires=expires
-  l:=Lease{ID:id,JobID:j.ID,WorkerID:workerID,Batch:b.Range,FencingToken:s.fence,ExpiresAt:expires}
-  s.leases[id]=l;j.Status=JobRunning;return l,nil
- }}
- return Lease{},ErrLeaseNotFound
+func (s *MemoryStore) LeaseNext(workerID string, d time.Duration) (Lease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	worker, ok := s.workers[workerID]
+	if !ok {
+		return Lease{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	worker.LastSeenAt = now
+	s.workers[workerID] = worker
+
+	// Requeue expired leases before assigning new work.
+	for _, job := range s.jobs {
+		for i := range job.Batches {
+			task := &job.Batches[i]
+			if task.Status == BatchLeased && !task.LeaseExpires.After(now) {
+				delete(s.leases, task.LeaseID)
+				task.Status = BatchQueued
+				task.LeaseID = ""
+				task.WorkerID = ""
+				task.FencingToken = 0
+				task.LeaseExpires = time.Time{}
+			}
+		}
+	}
+
+	for _, job := range s.jobs {
+		for i := range job.Batches {
+			task := &job.Batches[i]
+			if task.Status != BatchQueued {
+				continue
+			}
+			leaseID, err := newID()
+			if err != nil {
+				return Lease{}, err
+			}
+			s.fence++
+			expires := now.Add(d)
+			task.Status = BatchLeased
+			task.LeaseID = leaseID
+			task.WorkerID = workerID
+			task.FencingToken = s.fence
+			task.LeaseExpires = expires
+
+			lease := Lease{
+				ID: leaseID, JobID: job.ID, WorkerID: workerID,
+				Batch: task.Range, FencingToken: s.fence, ExpiresAt: expires,
+			}
+			s.leases[leaseID] = lease
+			job.Status = JobRunning
+			return lease, nil
+		}
+	}
+	return Lease{}, ErrLeaseNotFound
 }
+
 func(s *MemoryStore)CompleteLease(workerID,leaseID string,token uint64,result BatchResult)(Job,error){
  s.mu.Lock();defer s.mu.Unlock();l,ok:=s.leases[leaseID];if !ok{return Job{},ErrLeaseNotFound}
  if l.WorkerID!=workerID||l.FencingToken!=token{return Job{},ErrLeaseOwnership}
