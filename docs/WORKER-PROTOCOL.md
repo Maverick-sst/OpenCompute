@@ -15,7 +15,7 @@ Leases last 30 seconds. Expired leases are returned to the queue and reassigned 
 Terminal 1:
 
 ```bash
-go run ./cmd/coordinator
+OCF_STATE_PATH=./data/ocf-state.json go run ./cmd/coordinator
 ```
 
 Terminal 2:
@@ -47,4 +47,4 @@ curl http://127.0.0.1:8080/api/v1/jobs/JOB_ID
 
 ## Security limitations
 
-This protocol is for trusted local development only. Worker IDs are identifiers, not credentials; endpoints are unauthenticated and must not be exposed to the public internet. TLS, signed worker credentials, workload isolation, resource enforcement, durable state, and provider trust are not implemented. Never use this iteration with sensitive data or untrusted public workers.
+This protocol is for trusted local development only. Set `OCF_API_TOKEN` on the coordinator to require a shared bearer token on all `/api/v1/*` routes. Pass the same value to the worker via the `OCF_API_TOKEN` environment variable or `-token`. The coordinator refuses non-local binds without a token. This is only a basic shared-secret gate: use TLS in any network deployment, rotate the secret if exposed, and do not treat it as a multi-tenant identity system. Workload isolation, resource enforcement, and provider trust are not implemented. Never use this iteration with sensitive data or untrusted public workers.
