@@ -162,19 +162,53 @@ func (s *MemoryStore) LeaseNext(workerID string, d time.Duration) (Lease, error)
 	return Lease{}, ErrLeaseNotFound
 }
 
-func(s *MemoryStore)CompleteLease(workerID,leaseID string,token uint64,result BatchResult)(Job,error){
- s.mu.Lock();defer s.mu.Unlock();l,ok:=s.leases[leaseID];if !ok{return Job{},ErrLeaseNotFound}
- if l.WorkerID!=workerID||l.FencingToken!=token{return Job{},ErrLeaseOwnership}
- now:=time.Now().UTC();if !l.ExpiresAt.After(now){return Job{},ErrLeaseExpired}
- j,ok:=s.jobs[l.JobID];if !ok{return Job{},ErrNotFound}
- for i:=range j.Batches{b:=&j.Batches[i];if b.LeaseID!=leaseID||b.FencingToken!=token{continue}
-  if result.Processed!=b.End-b.Start{return Job{},fmt.Errorf("processed count must equal batch length")}
-  result.CompletedAt=now;b.Status=BatchCompleted;b.Result=&result;delete(s.leases,leaseID)
-  done:=true;for _,other:=range j.Batches{if other.Status!=BatchCompleted{done=false;break}}
-  if done{j.Status=JobCompleted};return cloneJob(j),nil
- }}
- return Job{},ErrLeaseNotFound
+func (s *MemoryStore) CompleteLease(workerID, leaseID string, token uint64, result BatchResult) (Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lease, ok := s.leases[leaseID]
+	if !ok {
+		return Job{}, ErrLeaseNotFound
+	}
+	if lease.WorkerID != workerID || lease.FencingToken != token {
+		return Job{}, ErrLeaseOwnership
+	}
+	now := time.Now().UTC()
+	if !lease.ExpiresAt.After(now) {
+		return Job{}, ErrLeaseExpired
+	}
+	job, ok := s.jobs[lease.JobID]
+	if !ok {
+		return Job{}, ErrNotFound
+	}
+	for i := range job.Batches {
+		task := &job.Batches[i]
+		if task.LeaseID != leaseID || task.FencingToken != token {
+			continue
+		}
+		if result.Processed != task.End-task.Start {
+			return Job{}, fmt.Errorf("processed count must equal batch length")
+		}
+		result.CompletedAt = now
+		task.Status = BatchCompleted
+		task.Result = &result
+		delete(s.leases, leaseID)
+
+		allDone := true
+		for _, other := range job.Batches {
+			if other.Status != BatchCompleted {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			job.Status = JobCompleted
+		}
+		return cloneJob(job), nil
+	}
+	return Job{}, ErrLeaseNotFound
 }
+
 func cloneJob(j *Job)Job{
  c:=*j;c.Batches=append([]BatchTask(nil),j.Batches...)
  for i:=range c.Batches{if j.Batches[i].Result!=nil{r:=*j.Batches[i].Result;c.Batches[i].Result=&r}}
