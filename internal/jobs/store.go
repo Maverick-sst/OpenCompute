@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
 	"github.com/Maverick-sst/OpenCompute/internal/batch"
+	"sort"
 	"sync"
 	"time"
 )
