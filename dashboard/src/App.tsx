@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 type Job = {
   id: string;
@@ -68,7 +68,7 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [refresh]);
 
-  async function submitJob(event: React.FormEvent<HTMLFormElement>) {
+  async function submitJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     try {
