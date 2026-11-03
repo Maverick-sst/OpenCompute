@@ -2,6 +2,8 @@ package batch
 
 import "fmt"
 
+const maxBatchCount int64 = 100_000
+
 // Range is a half-open interval [Start, End) in the input item sequence.
 type Range struct {
 	Index int   `json:"index"`
@@ -19,12 +21,17 @@ func Partition(total, batchSize int64) ([]Range, error) {
 		return nil, fmt.Errorf("batch size must be greater than zero")
 	}
 
-	count := (total + batchSize - 1) / batchSize
-	ranges := make([]Range, 0, count)
+	// This form avoids overflowing total + batchSize - 1.
+	count := (total-1)/batchSize + 1
+	if count > maxBatchCount {
+		return nil, fmt.Errorf("batch count exceeds limit of %d", maxBatchCount)
+	}
+
+	ranges := make([]Range, 0, int(count))
 	for start, index := int64(0), 0; start < total; index++ {
-		end := start + batchSize
-		if end > total {
-			end = total
+		end := total
+		if remaining := total - start; batchSize < remaining {
+			end = start + batchSize
 		}
 		ranges = append(ranges, Range{Index: index, Start: start, End: end})
 		start = end
