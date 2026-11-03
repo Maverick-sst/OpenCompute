@@ -1,72 +1,139 @@
 package jobs
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
-	"sync"
-	"time"
-
-	"github.com/Maverick-sst/OpenCompute/internal/batch"
+ "crypto/rand"
+ "encoding/hex"
+ "errors"
+ "fmt"
+ "sync"
+ "time"
+ "github.com/Maverick-sst/OpenCompute/internal/batch"
 )
 
-var ErrNotFound = errors.New("job not found")
-
-type Status string
-
+var (
+ ErrNotFound = errors.New("resource not found")
+ ErrLeaseNotFound = errors.New("lease not found")
+ ErrLeaseOwnership = errors.New("lease ownership or fencing token mismatch")
+ ErrLeaseExpired = errors.New("lease expired")
+)
+type JobStatus string
+type BatchStatus string
 const (
-	StatusQueued Status = "queued"
+ JobQueued JobStatus = "queued"
+ JobRunning JobStatus = "running"
+ JobCompleted JobStatus = "completed"
+ BatchQueued BatchStatus = "queued"
+ BatchLeased BatchStatus = "leased"
+ BatchCompleted BatchStatus = "completed"
 )
-
+type BatchResult struct {
+ Processed int64 `json:"processed"`
+ Checksum uint64 `json:"checksum"`
+ CompletedAt time.Time `json:"completed_at"`
+}
+type BatchTask struct {
+ batch.Range
+ Status BatchStatus `json:"status"`
+ LeaseID string `json:"lease_id,omitempty"`
+ WorkerID string `json:"worker_id,omitempty"`
+ FencingToken uint64 `json:"fencing_token,omitempty"`
+ LeaseExpires time.Time `json:"lease_expires_at,omitempty"`
+ Result *BatchResult `json:"result,omitempty"`
+}
 type Job struct {
-	ID         string        `json:"id"`
-	TotalItems int64         `json:"total_items"`
-	BatchSize  int64         `json:"batch_size"`
-	Status     Status        `json:"status"`
-	Batches    []batch.Range `json:"batches"`
-	CreatedAt  time.Time     `json:"created_at"`
+ ID string `json:"id"`
+ TotalItems int64 `json:"total_items"`
+ BatchSize int64 `json:"batch_size"`
+ Status JobStatus `json:"status"`
+ Batches []BatchTask `json:"batches"`
+ CreatedAt time.Time `json:"created_at"`
 }
-
+type Worker struct {
+ ID string `json:"id"`
+ Name string `json:"name"`
+ CPUCores int `json:"cpu_cores"`
+ MemoryMB int64 `json:"memory_mb"`
+ RegisteredAt time.Time `json:"registered_at"`
+ LastSeenAt time.Time `json:"last_seen_at"`
+}
+type Lease struct {
+ ID string `json:"id"`
+ JobID string `json:"job_id"`
+ WorkerID string `json:"worker_id"`
+ Batch batch.Range `json:"batch"`
+ FencingToken uint64 `json:"fencing_token"`
+ ExpiresAt time.Time `json:"expires_at"`
+}
 type Store interface {
-	Create(totalItems, batchSize int64) (Job, error)
-	Get(id string) (Job, error)
+ Create(int64,int64)(Job,error)
+ Get(string)(Job,error)
+ RegisterWorker(string,int,int64)(Worker,error)
+ Heartbeat(string)(Worker,error)
+ LeaseNext(string,time.Duration)(Lease,error)
+ CompleteLease(string,string,uint64,BatchResult)(Job,error)
 }
-
 type MemoryStore struct {
-	mu   sync.RWMutex
-	jobs map[string]Job
+ mu sync.Mutex
+ jobs map[string]*Job
+ workers map[string]Worker
+ leases map[string]Lease
+ fence uint64
 }
-
-func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{jobs: make(map[string]Job)}
+func NewMemoryStore()*MemoryStore {
+ return &MemoryStore{jobs:map[string]*Job{},workers:map[string]Worker{},leases:map[string]Lease{}}
 }
-
-func (s *MemoryStore) Create(totalItems, batchSize int64) (Job, error) {
-	ranges, err := batch.Partition(totalItems, batchSize)
-	if err != nil {
-		return Job{}, err
-	}
-	idBytes := make([]byte, 16)
-	if _, err := rand.Read(idBytes); err != nil {
-		return Job{}, err
-	}
-	job := Job{
-		ID: hex.EncodeToString(idBytes), TotalItems: totalItems,
-		BatchSize: batchSize, Status: StatusQueued,
-		Batches: ranges, CreatedAt: time.Now().UTC(),
-	}
-	s.mu.Lock()
-	s.jobs[job.ID] = job
-	s.mu.Unlock()
-	return job, nil
+func newID()(string,error) {
+ b:=make([]byte,16); if _,err:=rand.Read(b);err!=nil{return "",err};return hex.EncodeToString(b),nil
 }
-
-func (s *MemoryStore) Get(id string) (Job, error) {
-	s.mu.RLock()
-	job, ok := s.jobs[id]
-	s.mu.RUnlock()
-	if !ok {
-		return Job{}, ErrNotFound
-	}
-	return job, nil
+func(s *MemoryStore)Create(total,size int64)(Job,error){
+ ranges,err:=batch.Partition(total,size);if err!=nil{return Job{},err}
+ id,err:=newID();if err!=nil{return Job{},err}
+ tasks:=make([]BatchTask,len(ranges));for i,r:=range ranges{tasks[i]=BatchTask{Range:r,Status:BatchQueued}}
+ j:=&Job{ID:id,TotalItems:total,BatchSize:size,Status:JobQueued,Batches:tasks,CreatedAt:time.Now().UTC()}
+ s.mu.Lock();s.jobs[id]=j;out:=cloneJob(j);s.mu.Unlock();return out,nil
+}
+func(s *MemoryStore)Get(id string)(Job,error){
+ s.mu.Lock();defer s.mu.Unlock();j,ok:=s.jobs[id];if !ok{return Job{},ErrNotFound};return cloneJob(j),nil
+}
+func(s *MemoryStore)RegisterWorker(name string,cores int,mem int64)(Worker,error){
+ if cores<1||mem<1{return Worker{},fmt.Errorf("cpu_cores and memory_mb must be positive")}
+ id,err:=newID();if err!=nil{return Worker{},err};now:=time.Now().UTC()
+ w:=Worker{ID:id,Name:name,CPUCores:cores,MemoryMB:mem,RegisteredAt:now,LastSeenAt:now}
+ s.mu.Lock();s.workers[id]=w;s.mu.Unlock();return w,nil
+}
+func(s *MemoryStore)Heartbeat(id string)(Worker,error){
+ s.mu.Lock();defer s.mu.Unlock();w,ok:=s.workers[id];if !ok{return Worker{},ErrNotFound}
+ w.LastSeenAt=time.Now().UTC();s.workers[id]=w;return w,nil
+}
+func(s *MemoryStore)LeaseNext(workerID string,d time.Duration)(Lease,error){
+ s.mu.Lock();defer s.mu.Unlock();w,ok:=s.workers[workerID];if !ok{return Lease{},ErrNotFound}
+ now:=time.Now().UTC();w.LastSeenAt=now;s.workers[workerID]=w
+ for _,j:=range s.jobs{for i:=range j.Batches{b:=&j.Batches[i];if b.Status==BatchLeased&&!b.LeaseExpires.After(now){
+  delete(s.leases,b.LeaseID);b.Status=BatchQueued;b.LeaseID="";b.WorkerID="";b.FencingToken=0;b.LeaseExpires=time.Time{}
+ }}}
+ for _,j:=range s.jobs{for i:=range j.Batches{b:=&j.Batches[i];if b.Status!=BatchQueued{continue}
+  id,err:=newID();if err!=nil{return Lease{},err};s.fence++;expires:=now.Add(d)
+  b.Status=BatchLeased;b.LeaseID=id;b.WorkerID=workerID;b.FencingToken=s.fence;b.LeaseExpires=expires
+  l:=Lease{ID:id,JobID:j.ID,WorkerID:workerID,Batch:b.Range,FencingToken:s.fence,ExpiresAt:expires}
+  s.leases[id]=l;j.Status=JobRunning;return l,nil
+ }}
+ return Lease{},ErrLeaseNotFound
+}
+func(s *MemoryStore)CompleteLease(workerID,leaseID string,token uint64,result BatchResult)(Job,error){
+ s.mu.Lock();defer s.mu.Unlock();l,ok:=s.leases[leaseID];if !ok{return Job{},ErrLeaseNotFound}
+ if l.WorkerID!=workerID||l.FencingToken!=token{return Job{},ErrLeaseOwnership}
+ now:=time.Now().UTC();if !l.ExpiresAt.After(now){return Job{},ErrLeaseExpired}
+ j,ok:=s.jobs[l.JobID];if !ok{return Job{},ErrNotFound}
+ for i:=range j.Batches{b:=&j.Batches[i];if b.LeaseID!=leaseID||b.FencingToken!=token{continue}
+  if result.Processed!=b.End-b.Start{return Job{},fmt.Errorf("processed count must equal batch length")}
+  result.CompletedAt=now;b.Status=BatchCompleted;b.Result=&result;delete(s.leases,leaseID)
+  done:=true;for _,other:=range j.Batches{if other.Status!=BatchCompleted{done=false;break}}
+  if done{j.Status=JobCompleted};return cloneJob(j),nil
+ }}
+ return Job{},ErrLeaseNotFound
+}
+func cloneJob(j *Job)Job{
+ c:=*j;c.Batches=append([]BatchTask(nil),j.Batches...)
+ for i:=range c.Batches{if j.Batches[i].Result!=nil{r:=*j.Batches[i].Result;c.Batches[i].Result=&r}}
+ return c
 }
