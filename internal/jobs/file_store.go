@@ -176,6 +176,7 @@ func (s *FileStore) CompleteLease(workerID, leaseID string, token uint64, result
 		return Job{}, err
 	}
 	return job, nil
+}
 
 func (s *FileStore) ListJobs() []Job {
 	s.mu.Lock()
@@ -187,5 +188,4 @@ func (s *FileStore) ListWorkers() []Worker {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.memory.ListWorkers()
-}
 }
