@@ -4,26 +4,37 @@ import (
  "encoding/json"
  "errors"
  "net/http"
+ "crypto/subtle"
+ "os"
  "strings"
  "time"
  "github.com/Maverick-sst/OpenCompute/internal/jobs"
 )
 
 const leaseDuration=30*time.Second
-type Server struct{store jobs.Store}
-func NewServer(store jobs.Store)*Server{return &Server{store:store}}
+type Server struct{store jobs.Store; token string}
+func NewServer(store jobs.Store)*Server{return NewServerWithToken(store,os.Getenv("OCF_API_TOKEN"))}
+func NewServerWithToken(store jobs.Store,token string)*Server{return &Server{store:store,token:token}}
 func(s *Server)Handler()http.Handler{
  mux:=http.NewServeMux()
  mux.HandleFunc("GET /healthz",s.health)
- mux.HandleFunc("POST /api/v1/jobs",s.createJob)
- mux.HandleFunc("GET /api/v1/jobs/{id}",s.getJob)
- mux.HandleFunc("POST /api/v1/workers",s.registerWorker)
- mux.HandleFunc("POST /api/v1/workers/{id}/heartbeat",s.heartbeat)
- mux.HandleFunc("POST /api/v1/workers/{id}/leases",s.leaseNext)
- mux.HandleFunc("POST /api/v1/leases/{id}/complete",s.completeLease)
+ mux.Handle("POST /api/v1/jobs",s.authorize(http.HandlerFunc(s.createJob)))
+ mux.Handle("GET /api/v1/jobs/{id}",s.authorize(http.HandlerFunc(s.getJob)))
+ mux.Handle("POST /api/v1/workers",s.authorize(http.HandlerFunc(s.registerWorker)))
+ mux.Handle("POST /api/v1/workers/{id}/heartbeat",s.authorize(http.HandlerFunc(s.heartbeat)))
+ mux.Handle("POST /api/v1/workers/{id}/leases",s.authorize(http.HandlerFunc(s.leaseNext)))
+ mux.Handle("POST /api/v1/leases/{id}/complete",s.authorize(http.HandlerFunc(s.completeLease)))
  return mux
 }
 func(s *Server)health(w http.ResponseWriter,_ *http.Request){writeJSON(w,200,map[string]string{"status":"ok","service":"ocf-coordinator"})}
+func(s *Server)authorize(next http.Handler)http.Handler{
+ return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if s.token==""{next.ServeHTTP(w,r);return}
+  supplied:=strings.TrimPrefix(r.Header.Get("Authorization"),"Bearer ")
+  if subtle.ConstantTimeCompare([]byte(supplied),[]byte(s.token))!=1{writeError(w,http.StatusUnauthorized,"missing or invalid bearer token");return}
+  next.ServeHTTP(w,r)
+ })
+}
 type createJobRequest struct{TotalItems int64 `json:"total_items"`;BatchSize int64 `json:"batch_size"`}
 func(s *Server)createJob(w http.ResponseWriter,r *http.Request){
  var req createJobRequest;if !decodeJSON(w,r,&req){return}
