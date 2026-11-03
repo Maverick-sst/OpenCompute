@@ -31,13 +31,14 @@ type lease struct {
 func main() {
 	base := flag.String("coordinator", "http://127.0.0.1:8080", "Coordinator URL")
 	name := flag.String("name", "local-worker", "Worker name")
+	memoryMB := flag.Int64("memory-mb", 1024, "Memory capacity to advertise in MiB")
 	token := flag.String("token", os.Getenv("OCF_API_TOKEN"), "Coordinator bearer token (or OCF_API_TOKEN)")
 	flag.Parse()
 	var registered struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
-	err := request(http.MethodPost, *base+"/api/v1/workers", map[string]any{"name": *name, "cpu_cores": runtime.NumCPU(), "memory_mb": 1024}, *token, &registered)
+	err := request(http.MethodPost, *base+"/api/v1/workers", map[string]any{"name": *name, "cpu_cores": runtime.NumCPU(), "memory_mb": *memoryMB}, *token, &registered)
 	if err != nil {
 		log.Fatal(err)
 	}
