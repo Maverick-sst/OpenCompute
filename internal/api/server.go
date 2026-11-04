@@ -45,38 +45,6 @@ func (s *Server) listWorkers(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.store.ListWorkers())
 }
 
-func (s *Server) cors(next http.Handler) http.Handler {
-	allowed := strings.Split(os.Getenv("OCF_ALLOWED_ORIGINS"), ",")
-	if len(allowed) == 1 && allowed[0] == "" {
-		allowed = []string{"http://localhost:5173"}
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			matched := false
-			for _, candidate := range allowed {
-				if strings.TrimSpace(candidate) == origin {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				http.Error(w, "origin not allowed", http.StatusForbidden)
-				return
-			}
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		}
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]string{"status": "ok", "service": "ocf-coordinator"})
 }
