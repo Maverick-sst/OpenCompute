@@ -69,7 +69,7 @@ func (m *Manager) OpenSource(id string) (*os.File,error) {
  if _,err:=m.Get(id); err!=nil{return nil,err}
  return os.Open(filepath.Join(m.DatasetDir(id),"source.jsonl"))
 }
-func (m *Manager) OpenPartition(id string,start,end int64) (*os.File,error) {
+func (m *Manager) OpenPartition(id string,start,end int64) (io.ReadCloser,error) {
  d,err:=m.Get(id); if err!=nil{return nil,err}
  if start<0 || end<start || end>d.SizeBytes{return nil,fmt.Errorf("invalid partition range")}
  f,err:=os.Open(filepath.Join(m.DatasetDir(id),"source.jsonl")); if err!=nil{return nil,err}
