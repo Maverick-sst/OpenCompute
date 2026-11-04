@@ -1,0 +1,12 @@
+{"timestamp":"2026-11-01T08:00:01Z","level":"INFO","service":"gateway","status":200,"path":"/api/v1/health","latency_ms":8}
+{"timestamp":"2026-11-01T08:00:02Z","level":"INFO","service":"auth","status":200,"path":"/api/v1/session","latency_ms":42}
+{"timestamp":"2026-11-01T08:00:03Z","level":"WARN","service":"gateway","status":429,"path":"/api/v1/search","latency_ms":11}
+{"timestamp":"2026-11-01T08:00:04Z","level":"ERROR","service":"orders","status":500,"path":"/api/v1/orders","latency_ms":240}
+{"timestamp":"2026-11-01T08:00:05Z","level":"INFO","service":"catalog","status":200,"path":"/api/v1/products","latency_ms":31}
+{"timestamp":"2026-11-01T08:00:06Z","level":"ERROR","service":"auth","status":401,"path":"/api/v1/session","latency_ms":6}
+{"timestamp":"2026-11-01T08:00:07Z","level":"INFO","service":"orders","status":201,"path":"/api/v1/orders","latency_ms":185}
+{"timestamp":"2026-11-01T08:00:08Z","level":"INFO","service":"gateway","status":200,"path":"/api/v1/search","latency_ms":55}
+{"timestamp":"2026-11-01T08:00:09Z","level":"ERROR","service":"catalog","status":503,"path":"/api/v1/products","latency_ms":1200}
+{"timestamp":"2026-11-01T08:00:10Z","level":"INFO","service":"auth","status":200,"path":"/api/v1/logout","latency_ms":12}
+{"timestamp":"2026-11-01T08:00:11Z","level":"INFO","service":"orders","status":200,"path":"/api/v1/orders/42","latency_ms":94}
+{"timestamp":"2026-11-01T08:00:12Z","level":"WARN","service":"gateway","status":404,"path":"/api/v1/unknown","latency_ms":4}
