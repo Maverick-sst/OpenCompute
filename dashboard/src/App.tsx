@@ -9,6 +9,8 @@ type Job = {
   created_at: string;
 };
 
+type Dataset = { id: string; filename: string; size_bytes: number; record_count: number; checksum: string; status: string; partitions: number };
+
 type Worker = {
   id: string;
   name: string;
@@ -24,6 +26,8 @@ export default function App() {
   const [token, setToken] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [totalItems, setTotalItems] = useState("1000000");
   const [batchSize, setBatchSize] = useState("100000");
   const [busy, setBusy] = useState(false);
@@ -68,6 +72,25 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [refresh]);
 
+  async function uploadDataset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const selected = form.elements.namedItem("dataset") as HTMLInputElement;
+    const file = selected.files?.[0];
+    if (!file) return;
+    setUploading(true); setError("");
+    try {
+      const uploadHeaders: Record<string, string> = {};
+      if (token.trim()) uploadHeaders.Authorization = `Bearer ${token.trim()}`;
+      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}/api/v1/datasets`, { method: "POST", headers: uploadHeaders, body: (() => { const data = new FormData(); data.append("file", file); return data; })() });
+      if (!response.ok) throw new Error(`Dataset upload failed (${response.status}): ${await response.text()}`);
+      const result = await response.json() as { dataset: Omit<Dataset, "partitions">; partitions: unknown[] };
+      setDatasets((current) => [{ ...result.dataset, partitions: result.partitions.length }, ...current]);
+      form.reset();
+    } catch (err) { setError(err instanceof Error ? err.message : "Unable to upload dataset"); }
+    finally { setUploading(false); }
+  }
+
   async function submitJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -100,7 +123,7 @@ export default function App() {
     <main className="shell">
       <header className="topbar">
         <div>
-          <div className="eyebrow">OPEN COMPUTE FABRIC / V0</div>
+          <div className="eyebrow">OPEN COMPUTE FABRIC / V1 PREVIEW</div>
           <h1>Compute, coordinated.</h1>
           <p className="subtitle">A live view of jobs, batches, and participating workers.</p>
         </div>
@@ -142,7 +165,7 @@ export default function App() {
             <label>Batch size<input type="number" min="1" value={batchSize} onChange={(e) => setBatchSize(e.target.value)} required /></label>
             <button type="submit">Create batch job <span>↗</span></button>
           </form>
-          <p className="hint">Start with synthetic data. V0 workers process deterministic item ranges, not arbitrary user code.</p>
+          <p className="hint">V0 synthetic range jobs remain available while V1 dataset processing is integrated.</p>
         </article>
 
         <article className="panel section">
@@ -162,6 +185,21 @@ export default function App() {
         </article>
       </section>
 
+      <section className="panel section" style={{ marginBottom: 18 }}>
+        <div className="section-heading"><div><div className="eyebrow">DATA PLANE · V1 PREVIEW</div><h2>JSONL datasets</h2></div><span className="count">{datasets.length} uploaded this session</span></div>
+        <form onSubmit={uploadDataset} className="job-form">
+          <label>Choose a JSONL file<input name="dataset" type="file" accept=".jsonl,.ndjson,application/x-ndjson,application/json" required /></label>
+          <button type="submit" disabled={uploading}>{uploading ? "Uploading and validating…" : "Upload dataset ↗"}</button>
+        </form>
+        <p className="hint">Uploads are stored on the coordinator disk, checksummed, validated, and split at JSONL line boundaries. Current development limit: 256 MiB.</p>
+        {datasets.length > 0 && <div className="job-list">{datasets.map((dataset) => <div className="job-row" key={dataset.id}>
+          <div className="job-meta"><strong>{dataset.filename}</strong><span className="pill completed">{dataset.status}</span></div>
+          <div className="job-details"><span>{dataset.record_count.toLocaleString()} records</span><span>{(dataset.size_bytes / 1048576).toFixed(2)} MiB</span><span>{dataset.partitions} partitions</span></div>
+          <small>SHA-256 · {dataset.checksum}</small>
+          <small>Dataset ID · {dataset.id}</small>
+        </div>)}</div>}
+      </section>
+
       <section className="panel section jobs-section">
         <div className="section-heading"><div><div className="eyebrow">EXECUTION QUEUE</div><h2>Recent jobs</h2></div><span className="muted">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : "Waiting for data"}</span></div>
         {jobs.length === 0 ? <p className="empty">No jobs yet. Submit a workload to see batches appear here.</p> : (
@@ -179,7 +217,7 @@ export default function App() {
         )}
       </section>
 
-      <footer><span>OPENCOMPUTE FABRIC</span><span>V0 · experimental network</span></footer>
+      <footer><span>OPENCOMPUTE FABRIC</span><span>V1 preview · local data plane</span></footer>
     </main>
   );
 }
