@@ -1,10 +1,9 @@
 package api
 
 import (
- "fmt"
+ "io"
  "net/http"
  "os"
- "path/filepath"
  "strconv"
  "strings"
 
@@ -17,11 +16,7 @@ func (s *Server) uploadDataset(w http.ResponseWriter,r *http.Request){
  if err:=r.ParseMultipartForm(8<<20);err!=nil{writeError(w,http.StatusBadRequest,"invalid multipart upload or dataset exceeds size limit");return}
  file,header,err:=r.FormFile("file");if err!=nil{writeError(w,400,"multipart field 'file' is required");return};defer file.Close()
  d,parts,err:=s.datasets.Save(header.Filename,file)
- if err!=nil{
-  status:=http.StatusUnprocessableEntity
-  if strings.Contains(err.Error(),"maximum size"){status=http.StatusRequestEntityTooLarge}
-  writeError(w,status,err.Error());return
- }
+ if err!=nil{status:=http.StatusUnprocessableEntity;if strings.Contains(err.Error(),"maximum size"){status=http.StatusRequestEntityTooLarge};writeError(w,status,err.Error());return}
  writeJSON(w,http.StatusCreated,map[string]any{"dataset":d,"partitions":parts})
 }
 func(s *Server)getDataset(w http.ResponseWriter,r *http.Request){
@@ -34,23 +29,16 @@ func(s *Server)listDatasetPartitions(w http.ResponseWriter,r *http.Request){
 }
 func(s *Server)downloadPartition(w http.ResponseWriter,r *http.Request){
  id:=strings.TrimSpace(r.PathValue("id"))
- // Partition identifiers are opaque manifest IDs; never use them as filesystem paths.
- root:=s.datasetsRoot
- entries,err:=os.ReadDir(root);if err!=nil{writeError(w,404,"partition not found");return}
+ entries,err:=os.ReadDir(s.datasetsRoot);if err!=nil{writeError(w,404,"partition not found");return}
  for _,entry:=range entries{
   if !entry.IsDir(){continue}
-  datasetID:=entry.Name()
-  parts,e:=s.datasets.Partitions(datasetID);if e!=nil{continue}
+  parts,e:=s.datasets.Partitions(entry.Name());if e!=nil{continue}
   for _,p:=range parts{if p.ID==id{
-   f,e:=s.datasets.OpenPartition(datasetID,p.StartOffset,p.EndOffset);if e!=nil{writeError(w,500,"unable to open partition");return};defer f.Close()
+   f,e:=s.datasets.OpenPartition(entry.Name(),p.StartOffset,p.EndOffset);if e!=nil{writeError(w,500,"unable to open partition");return};defer f.Close()
    w.Header().Set("Content-Type","application/x-ndjson")
    w.Header().Set("Content-Length",strconv.FormatInt(p.EndOffset-p.StartOffset,10))
-   _,_=ioCopy(w,f);return
+   _,_=io.Copy(w,f);return
   }}
  }
  writeError(w,404,"partition not found")
 }
-func ioCopy(w http.ResponseWriter,r *os.File)(int64,error){return copyStream(w,r)}
-func copyStream(w http.ResponseWriter,r interface{Read([]byte)(int,error)})(int64,error){return copyHTTP(w,r)}
-var _ = fmt.Sprintf
-var _ = filepath.Clean
