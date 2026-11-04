@@ -4,7 +4,9 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+ "path/filepath"
 	"github.com/Maverick-sst/OpenCompute/internal/jobs"
+ "github.com/Maverick-sst/OpenCompute/internal/dataset"
 	"net/http"
 	"os"
 	"strings"
@@ -22,11 +24,11 @@ func NewServer(store jobs.Store) *Server {
 	return NewServerWithToken(store, os.Getenv("OCF_API_TOKEN"))
 }
 func NewServerWithToken(store jobs.Store, token string) *Server {
-	return &Server{store: store, token: token}
+	root:=os.Getenv("OCF_DATASET_ROOT"); if root=="" {root="./data/datasets"}\n manager,err:=dataset.NewManager(root,256<<20,1<<20,4<<20); if err!=nil {panic(err)}\n return &Server{store: store, token: token, datasets:manager, datasetsRoot:filepath.Clean(root)}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /healthz", s.health)\n mux.Handle("POST /api/v1/datasets",s.authorize(http.HandlerFunc(s.uploadDataset)))\n mux.Handle("GET /api/v1/datasets/{id}",s.authorize(http.HandlerFunc(s.getDataset)))\n mux.Handle("GET /api/v1/datasets/{id}/partitions",s.authorize(http.HandlerFunc(s.listDatasetPartitions)))\n mux.Handle("GET /api/v1/partitions/{id}/data",s.authorize(http.HandlerFunc(s.downloadPartition)))
 	mux.Handle("POST /api/v1/jobs", s.authorize(http.HandlerFunc(s.createJob)))
 	mux.Handle("GET /api/v1/jobs", s.authorize(http.HandlerFunc(s.listJobs)))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authorize(http.HandlerFunc(s.getJob)))
