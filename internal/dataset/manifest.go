@@ -2,6 +2,7 @@ package dataset
 
 import (
  "bufio"
+ "crypto/rand"
  "encoding/json"
  "fmt"
  "io"
@@ -9,8 +10,6 @@ import (
  "path/filepath"
 )
 
-type randomReader struct{}
-func(randomReader)Read(p []byte)(int,error){return os.ReadFile("/dev/urandom")Read(p)}
 func buildManifest(path,id string,target,maxRecord int64)([]Partition,int64,error){
  f,err:=os.Open(path);if err!=nil{return nil,0,err};defer f.Close()
  st,err:=f.Stat();if err!=nil{return nil,0,err}
@@ -26,7 +25,6 @@ func buildManifest(path,id string,target,maxRecord int64)([]Partition,int64,erro
    if raw[len(raw)-1]=='\n'{raw=raw[:len(raw)-1]}
    if len(raw)>0 && raw[len(raw)-1]=='\r'{raw=raw[:len(raw)-1]}
    if len(raw)>0 {
-    // Upload validates JSON syntax and requires each nonblank record to be an object.
     var value map[string]json.RawMessage
     if err:=json.Unmarshal(raw,&value);err!=nil || value==nil {return nil,0,fmt.Errorf("invalid JSON object near byte offset %d",offset)}
     records++;partRecords++
@@ -44,3 +42,4 @@ func buildManifest(path,id string,target,maxRecord int64)([]Partition,int64,erro
 }
 func writeJSON(path string,v any)error{b,e:=json.MarshalIndent(v,"","  ");if e!=nil{return e};return os.WriteFile(path,b,0600)}
 func readJSON(path string,v any)error{b,e:=os.ReadFile(filepath.Clean(path));if e!=nil{return e};return json.Unmarshal(b,v)}
+func newID()(string,error){b:=make([]byte,16);if _,e:=rand.Read(b);e!=nil{return "",e};return fmt.Sprintf("%x",b),nil}
