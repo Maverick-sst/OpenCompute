@@ -22,5 +22,5 @@ func TestSaveRejectsMalformedJSONL(t *testing.T){
 func TestSaveAcceptsBlankLinesAndNoTrailingNewline(t *testing.T){
  m,_:=NewManager(t.TempDir(),1<<20,1024,1024)
  d,p,err:=m.Save("logs.jsonl",strings.NewReader("\n{\"ok\":true}"));if err!=nil{t.Fatal(err)}
- if d.RecordCount!=1||len(p)!=1||p[0].EndOffset!=11{t.Fatalf("dataset=%+v parts=%+v",d,p)}
+ if d.RecordCount!=1||len(p)!=1||p[0].EndOffset!=int64(len("\n{\"ok\":true}")){t.Fatalf("dataset=%+v parts=%+v",d,p)}
 }
