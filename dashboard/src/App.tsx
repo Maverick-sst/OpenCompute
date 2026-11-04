@@ -9,7 +9,9 @@ type Job = {
   created_at: string;
 };
 
-type Dataset = { id: string; filename: string; size_bytes: number; record_count: number; checksum: string; status: string; partitions: number };\n\ntype Worker = {
+type Dataset = { id: string; filename: string; size_bytes: number; record_count: number; checksum: string; status: string; partitions: number };
+
+type Worker = {
   id: string;
   name: string;
   cpu_cores: number;
@@ -23,7 +25,9 @@ export default function App() {
   const [apiBase, setApiBase] = useState(API_DEFAULT);
   const [token, setToken] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [workers, setWorkers] = useState<Worker[]>([]);\n  const [datasets, setDatasets] = useState<Dataset[]>([]);\n  const [uploading, setUploading] = useState(false);
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [totalItems, setTotalItems] = useState("1000000");
   const [batchSize, setBatchSize] = useState("100000");
   const [busy, setBusy] = useState(false);
@@ -68,7 +72,26 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [refresh]);
 
-  async function uploadDataset(event: FormEvent<HTMLFormElement>) {\n    event.preventDefault();\n    const form = event.currentTarget;\n    const selected = form.elements.namedItem("dataset") as HTMLInputElement;\n    const file = selected.files?.[0];\n    if (!file) return;\n    setUploading(true); setError("");\n    try {\n      const uploadHeaders: Record<string, string> = {};\n      if (token.trim()) uploadHeaders.Authorization = `Bearer ${token.trim()}`;\n      const response = await fetch(`${apiBase.trim().replace(/\\/$/, "")}/api/v1/datasets`, { method: "POST", headers: uploadHeaders, body: (() => { const data = new FormData(); data.append("file", file); return data; })() });\n      if (!response.ok) throw new Error(`Dataset upload failed (${response.status}): ${await response.text()}`);\n      const result = await response.json() as { dataset: Omit<Dataset, "partitions">; partitions: unknown[] };\n      setDatasets((current) => [{ ...result.dataset, partitions: result.partitions.length }, ...current]);\n      form.reset();\n    } catch (err) { setError(err instanceof Error ? err.message : "Unable to upload dataset"); }\n    finally { setUploading(false); }\n  }\n\n  async function submitJob(event: FormEvent<HTMLFormElement>) {
+  async function uploadDataset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const selected = form.elements.namedItem("dataset") as HTMLInputElement;
+    const file = selected.files?.[0];
+    if (!file) return;
+    setUploading(true); setError("");
+    try {
+      const uploadHeaders: Record<string, string> = {};
+      if (token.trim()) uploadHeaders.Authorization = `Bearer ${token.trim()}`;
+      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}/api/v1/datasets`, { method: "POST", headers: uploadHeaders, body: (() => { const data = new FormData(); data.append("file", file); return data; })() });
+      if (!response.ok) throw new Error(`Dataset upload failed (${response.status}): ${await response.text()}`);
+      const result = await response.json() as { dataset: Omit<Dataset, "partitions">; partitions: unknown[] };
+      setDatasets((current) => [{ ...result.dataset, partitions: result.partitions.length }, ...current]);
+      form.reset();
+    } catch (err) { setError(err instanceof Error ? err.message : "Unable to upload dataset"); }
+    finally { setUploading(false); }
+  }
+
+  async function submitJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     try {
