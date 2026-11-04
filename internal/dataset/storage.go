@@ -81,4 +81,3 @@ func(s *sectionFile)Read(p []byte)(int,error){if s.remaining<=0{return 0,io.EOF}
 
 func safeFilename(v string) string { v=filepath.Base(strings.TrimSpace(v)); if v=="."||v==string(filepath.Separator)||v=="" {return "dataset.jsonl"}; return v }
 func validID(v string) bool { if len(v)!=32{return false}; for _,c:=range v {if !(c>='0'&&c<='9'||c>='a'&&c<='f'){return false}};return true }
-func newID()(string,error){b:=make([]byte,16);if _,e:=io.ReadFull(randomReader{},b);e!=nil{return "",e};return hex.EncodeToString(b),nil}
