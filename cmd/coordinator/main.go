@@ -14,7 +14,11 @@ import (
 func main() {
 	addr := os.Getenv("OCF_ADDR")
 	if addr == "" {
-		addr = "127.0.0.1:8080"
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		addr = net.JoinHostPort("0.0.0.0", port)
 	}
 	token := os.Getenv("OCF_API_TOKEN")
 	host, _, err := net.SplitHostPort(addr)
