@@ -25,3 +25,5 @@ The dashboard now has a JSONL upload panel and displays upload metadata and part
 - Full local Docker Compose orchestration and real multi-worker integration test.
 
 The partition stream endpoint is authenticated by the shared coordinator token but is not yet bound to a specific active worker lease. Keep it on a trusted local network only.
+
+Go source files are formatted with `gofmt` as part of the repository CI checks.
