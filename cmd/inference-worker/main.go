@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -28,10 +31,10 @@ type registration struct {
 }
 
 type workerAgent struct {
-	base, token, name, model, endpoint string
-	cores                              int
-	memoryMB                           int64
-	client                             *http.Client
+	base, token, name, model, endpoint, localEndpoint string
+	cores                                             int
+	memoryMB                                          int64
+	client                                            *http.Client
 }
 
 func main() {
@@ -39,6 +42,7 @@ func main() {
 	model := flag.String("model", env("OCF_MODEL_PATH", os.ExpandEnv("$HOME/models/opencompute/qwen2.5-0.5b-instruct-q4_k_m.gguf")), "Path to GGUF model")
 	nativeHost := flag.String("native-host", "127.0.0.1", "Loopback address for llama-server")
 	nativePort := flag.Int("native-port", 8081, "llama-server HTTP port")
+	advertiseEndpoint := flag.String("advertise-endpoint", "", "reachable worker inference endpoint advertised to the coordinator")
 	threads := flag.Int("threads", 2, "CPU threads for inference")
 	ctxSize := flag.Int("ctx-size", 2048, "Inference context size")
 	agentHost := flag.String("host", "127.0.0.1", "Loopback address for supervisor health API")
@@ -50,8 +54,8 @@ func main() {
 	memory := flag.Int64("memory-mb", 1024, "Memory capacity to advertise in MiB")
 	flag.Parse()
 
-	if !loopback(*agentHost) {
-		log.Fatal("supervisor health API must bind to loopback during M1")
+	if !loopback(*agentHost) && *token == "" {
+		log.Fatal("a coordinator token is required when the worker API binds beyond loopback")
 	}
 	if *heartbeat < time.Second {
 		log.Fatal("heartbeat interval must be at least 1s")
@@ -74,14 +78,18 @@ func main() {
 	log.Printf("native inference runtime ready: %s", sup.Endpoint())
 
 	agent := &workerAgent{
-		base:     strings.TrimRight(*coordinator, "/"),
-		token:    *token,
-		name:     *name,
-		model:    baseName(*model),
-		endpoint: sup.Endpoint(),
-		cores:    *threads,
-		memoryMB: *memory,
-		client:   &http.Client{Timeout: 5 * time.Second},
+		base:          strings.TrimRight(*coordinator, "/"),
+		token:         *token,
+		name:          *name,
+		model:         baseName(*model),
+		endpoint:      sup.Endpoint(),
+		localEndpoint: sup.Endpoint(),
+		cores:         *threads,
+		memoryMB:      *memory,
+		client:        &http.Client{Timeout: 5 * time.Second},
+	}
+	if *advertiseEndpoint != "" {
+		agent.endpoint = strings.TrimRight(*advertiseEndpoint, "/")
 	}
 	if agent.base == "" {
 		log.Fatal("coordinator URL is required")
@@ -104,6 +112,7 @@ func main() {
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, sup, reg)
 	})
+	mux.Handle("POST /v1/chat/completions", agent.authorizeWorker(http.HandlerFunc(agent.proxyChatCompletion)))
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(*agentHost, strconv.Itoa(*agentPort)),
@@ -138,6 +147,51 @@ func main() {
 		log.Printf("native runtime shutdown: %v", err)
 	}
 	log.Printf("OpenCompute inference worker stopped")
+}
+
+func (a *workerAgent) authorizeWorker(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.token != "" {
+			supplied := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(supplied), []byte(a.token)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *workerAgent) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > 1<<20 {
+		http.Error(w, "request body exceeds 1 MiB", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	// The advertised endpoint may be a LAN address. The native process itself
+	// remains bound to loopback; use the supervisor's local endpoint here.
+	target, err := url.Parse(strings.TrimRight(a.localEndpoint, "/"))
+	if err != nil {
+		http.Error(w, "invalid local inference endpoint", http.StatusBadGateway)
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	director := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		director(req)
+		req.Method = http.MethodPost
+		req.URL.Path = strings.TrimRight(target.Path, "/") + "/v1/chat/completions"
+		req.URL.RawPath = ""
+		req.URL.RawQuery = ""
+		req.Host = target.Host
+		req.Header.Del("Authorization")
+		req.Header.Set("Content-Type", "application/json")
+	}
+	proxy.FlushInterval = -1
+	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, proxyErr error) {
+		http.Error(rw, "native inference request failed: "+proxyErr.Error(), http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 func (a *workerAgent) register(ctx context.Context) (registration, error) {
