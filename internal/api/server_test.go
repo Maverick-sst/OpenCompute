@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Maverick-sst/OpenCompute/internal/jobs"
@@ -92,4 +93,58 @@ func TestRegisterInferenceWorkerRejectsMissingCapabilities(t *testing.T) {
 	if result.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
 	}
+}
+
+func TestProxyChatCompletionToRegisteredInferenceWorker(t *testing.T) {
+	var gotAuthorization string
+	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" { t.Errorf("upstream path=%q", r.URL.Path) }
+		if r.Method != http.MethodPost { t.Errorf("upstream method=%q", r.Method) }
+		gotAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-test","choices":[{"message":{"content":"hello"}}]}`))
+	}))
+	defer native.Close()
+	store := jobs.NewMemoryStore()
+	worker, err := store.RegisterInferenceWorker("test-inference", 2, 2048, "llama.cpp", "test.gguf", native.URL, []string{"chat-completions"})
+	if err != nil { t.Fatal(err) }
+	handler := NewServerWithToken(store, "coordinator-secret").Handler()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/workers/"+worker.ID+"/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer coordinator-secret")
+	req.Header.Set("Content-Type", "application/json")
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if result.Code != http.StatusOK { t.Fatalf("status=%d body=%s", result.Code, result.Body.String()) }
+	if gotAuthorization != "" { t.Fatalf("coordinator authorization leaked upstream: %q", gotAuthorization) }
+	if !strings.Contains(result.Body.String(), "chatcmpl-test") { t.Fatalf("unexpected upstream response: %s", result.Body.String()) }
+}
+
+func TestProxyChatCompletionRejectsMissingAuth(t *testing.T) {
+	handler := NewServerWithToken(jobs.NewMemoryStore(), "secret").Handler()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/workers/missing/chat/completions", strings.NewReader(`{}`))
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if result.Code != http.StatusUnauthorized { t.Fatalf("status=%d want %d", result.Code, http.StatusUnauthorized) }
+}
+
+func TestProxyChatCompletionRejectsComputeWorker(t *testing.T) {
+	store := jobs.NewMemoryStore()
+	worker, err := store.RegisterWorker("compute", 2, 2048)
+	if err != nil { t.Fatal(err) }
+	handler := NewServer(store).Handler()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/workers/"+worker.ID+"/chat/completions", strings.NewReader(`{}`))
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if result.Code != http.StatusUnprocessableEntity { t.Fatalf("status=%d body=%s", result.Code, result.Body.String()) }
+}
+
+func TestProxyChatCompletionRejectsWorkerWithoutOperation(t *testing.T) {
+	store := jobs.NewMemoryStore()
+	worker, err := store.RegisterInferenceWorker("completion-only", 2, 2048, "llama.cpp", "test.gguf", "http://127.0.0.1:8081", []string{"completion"})
+	if err != nil { t.Fatal(err) }
+	handler := NewServer(store).Handler()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/workers/"+worker.ID+"/chat/completions", strings.NewReader(`{}`))
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if result.Code != http.StatusUnprocessableEntity { t.Fatalf("status=%d body=%s", result.Code, result.Body.String()) }
 }
