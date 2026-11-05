@@ -7,15 +7,15 @@ import (
 )
 
 type WorkerMetrics struct {
-	WorkerID        string    `json:"worker_id"`
-	RequestsTotal   uint64    `json:"requests_total"`
-	Successes       uint64    `json:"successes"`
-	Failures        uint64    `json:"failures"`
-	InFlight        int64     `json:"in_flight"`
+	WorkerID         string    `json:"worker_id"`
+	RequestsTotal    uint64    `json:"requests_total"`
+	Successes        uint64    `json:"successes"`
+	Failures         uint64    `json:"failures"`
+	InFlight         int64     `json:"in_flight"`
 	AverageLatencyMS float64   `json:"average_latency_ms"`
-	LastStatus      int       `json:"last_status,omitempty"`
-	LastRequestAt   time.Time `json:"last_request_at,omitempty"`
-	totalLatencyMS  float64
+	LastStatus       int       `json:"last_status,omitempty"`
+	LastRequestAt    time.Time `json:"last_request_at,omitempty"`
+	totalLatencyMS   float64
 }
 
 type Metrics struct {
