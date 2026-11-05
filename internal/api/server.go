@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/Maverick-sst/OpenCompute/internal/dataset"
-	"github.com/Maverick-sst/OpenCompute/internal/jobs"
 	"github.com/Maverick-sst/OpenCompute/internal/inference"
+	"github.com/Maverick-sst/OpenCompute/internal/jobs"
 )
 
 const leaseDuration = 30 * time.Second
