@@ -164,7 +164,9 @@ func TestRoundRobinInferenceRoutingUsesHealthyWorkers(t *testing.T) {
 	defer second.Close()
 
 	store := jobs.NewMemoryStore()
-	for _, item := range []struct { name, endpoint string }{{"first", first.URL}, {"second", second.URL}} {
+	for _, item := range []struct {
+		name, endpoint string
+	}{{"first", first.URL}, {"second", second.URL}} {
 		if _, err := store.RegisterInferenceWorker(item.name, 2, 2048, "llama.cpp", "test.gguf", item.endpoint, []string{"chat-completions"}); err != nil {
 			t.Fatal(err)
 		}
