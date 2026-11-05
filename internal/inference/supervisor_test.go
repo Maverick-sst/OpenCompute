@@ -1,7 +1,6 @@
 package inference
 
 import (
-	"net"
 	"testing"
 )
 
@@ -24,7 +23,7 @@ func TestLoopbackHost(t *testing.T) {
 }
 
 func TestEndpointIPv6(t *testing.T) {
-	s := NewSupervisor(Config{Host: net.IPv6loopback.String(), Port: 8081})
+	s := NewSupervisor(Config{Host: "::1", Port: 8081})
 	if got, want := s.Endpoint(), "http://[::1]:8081"; got != want {
 		t.Fatalf("Endpoint() = %q, want %q", got, want)
 	}
