@@ -15,6 +15,7 @@ import (
 
 	"github.com/Maverick-sst/OpenCompute/internal/dataset"
 	"github.com/Maverick-sst/OpenCompute/internal/jobs"
+	"github.com/Maverick-sst/OpenCompute/internal/inference"
 )
 
 const leaseDuration = 30 * time.Second
@@ -26,6 +27,7 @@ type Server struct {
 	datasetsRoot string
 	routeMu      sync.Mutex
 	routeIndex   int
+	sessions     *inference.SessionManager
 }
 
 func NewServer(store jobs.Store) *Server {
@@ -40,7 +42,7 @@ func NewServerWithToken(store jobs.Store, token string) *Server {
 	if err != nil {
 		panic(err)
 	}
-	return &Server{store: store, token: token, datasets: manager, datasetsRoot: filepath.Clean(root)}
+	return &Server{store: store, token: token, datasets: manager, datasetsRoot: filepath.Clean(root), sessions: inference.NewSessionManager()}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -54,6 +56,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/jobs/{id}", s.authorize(http.HandlerFunc(s.getJob)))
 	mux.Handle("GET /api/v1/workers", s.authorize(http.HandlerFunc(s.listWorkers)))
 	mux.Handle("POST /api/v1/inference/chat/completions", s.authorize(http.HandlerFunc(s.proxyChatCompletion)))
+	mux.Handle("POST /api/v1/inference/sessions", s.authorize(http.HandlerFunc(s.createInferenceSession)))
+	mux.Handle("GET /api/v1/inference/sessions/{id}", s.authorize(http.HandlerFunc(s.getInferenceSession)))
+	mux.Handle("POST /api/v1/inference/sessions/{id}/chat/completions", s.authorize(http.HandlerFunc(s.sessionChatCompletion)))
 	mux.Handle("POST /api/v1/inference/workers/{id}/chat/completions", s.authorize(http.HandlerFunc(s.proxyChatCompletion)))
 	mux.Handle("POST /api/v1/workers", s.authorize(http.HandlerFunc(s.registerWorker)))
 	mux.Handle("POST /api/v1/workers/{id}/heartbeat", s.authorize(http.HandlerFunc(s.heartbeat)))
@@ -72,6 +77,7 @@ func (s *Server) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	workerID := strings.TrimSpace(r.PathValue("id"))
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 	now := time.Now().UTC()
 	var selected *jobs.Worker
 	workers := s.store.ListWorkers()
@@ -134,9 +140,93 @@ func (s *Server) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, proxyErr error) {
+		s.sessions.InvalidateWorker(selected.ID)
+		if sessionID != "" {
+			s.sessions.Invalidate(sessionID)
+		}
 		writeError(rw, http.StatusBadGateway, "inference worker request failed: "+proxyErr.Error())
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (s *Server) eligibleInferenceWorkers() []jobs.Worker {
+	now := time.Now().UTC()
+	eligible := make([]jobs.Worker, 0)
+	for _, worker := range s.store.ListWorkers() {
+		if worker.Kind == "inference" && now.Sub(worker.LastSeenAt) <= 30*time.Second && hasOperation(worker.Operations, "chat-completions") {
+			eligible = append(eligible, worker)
+		}
+	}
+	return eligible
+}
+
+func (s *Server) nextInferenceWorker() (jobs.Worker, bool) {
+	eligible := s.eligibleInferenceWorkers()
+	if len(eligible) == 0 {
+		return jobs.Worker{}, false
+	}
+	s.routeMu.Lock()
+	worker := eligible[s.routeIndex%len(eligible)]
+	s.routeIndex++
+	s.routeMu.Unlock()
+	return worker, true
+}
+
+func (s *Server) createInferenceSession(w http.ResponseWriter, _ *http.Request) {
+	worker, ok := s.nextInferenceWorker()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "no healthy inference worker advertises chat-completions")
+		return
+	}
+	session, err := s.sessions.Create(worker.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create inference session")
+		return
+	}
+	writeJSON(w, http.StatusCreated, session)
+}
+
+func (s *Server) getInferenceSession(w http.ResponseWriter, r *http.Request) {
+	session, err := s.sessions.Get(strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
+func (s *Server) sessionChatCompletion(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("id"))
+	session, err := s.sessions.Get(sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	healthy := false
+	for _, worker := range s.eligibleInferenceWorkers() {
+		if worker.ID == session.WorkerID {
+			healthy = true
+			break
+		}
+	}
+	if !healthy || session.State != "active" {
+		worker, ok := s.nextInferenceWorker()
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "no healthy inference worker is available for session recovery")
+			return
+		}
+		session, err = s.sessions.Reassign(sessionID, worker.ID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+	}
+	_ = s.sessions.Touch(sessionID)
+	w.Header().Set("X-OpenCompute-Session-ID", session.ID)
+	w.Header().Set("X-OpenCompute-Session-Epoch", strconv.FormatUint(session.Epoch, 10))
+	r.SetPathValue("session_id", session.ID)
+	r.SetPathValue("id", session.WorkerID)
+	s.proxyChatCompletion(w, r)
 }
 
 func hasOperation(operations []string, expected string) bool {
