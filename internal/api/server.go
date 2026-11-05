@@ -24,8 +24,8 @@ type Server struct {
 	token        string
 	datasets     *dataset.Manager
 	datasetsRoot string
-	routeMu	sync.Mutex
-	routeIndex	int
+	routeMu      sync.Mutex
+	routeIndex   int
 }
 
 func NewServer(store jobs.Store) *Server {
