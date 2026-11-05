@@ -32,9 +32,9 @@ type registration struct {
 
 type workerAgent struct {
 	base, token, name, model, endpoint, localEndpoint string
-	cores	int
-	memoryMB	int64
-	client	*http.Client
+	cores                                             int
+	memoryMB                                          int64
+	client                                            *http.Client
 }
 
 func main() {
@@ -78,15 +78,15 @@ func main() {
 	log.Printf("native inference runtime ready: %s", sup.Endpoint())
 
 	agent := &workerAgent{
-		base:	strings.TrimRight(*coordinator, "/"),
-		token:	*token,
-		name:	*name,
-		model:	baseName(*model),
-		endpoint:	sup.Endpoint(),
-		localEndpoint:	sup.Endpoint(),
-		cores:	*threads,
-		memoryMB:	*memory,
-		client:	&http.Client{Timeout: 5 * time.Second},
+		base:          strings.TrimRight(*coordinator, "/"),
+		token:         *token,
+		name:          *name,
+		model:         baseName(*model),
+		endpoint:      sup.Endpoint(),
+		localEndpoint: sup.Endpoint(),
+		cores:         *threads,
+		memoryMB:      *memory,
+		client:        &http.Client{Timeout: 5 * time.Second},
 	}
 	if *advertiseEndpoint != "" {
 		agent.endpoint = strings.TrimRight(*advertiseEndpoint, "/")
