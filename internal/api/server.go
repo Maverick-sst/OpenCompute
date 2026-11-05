@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/leases/{id}/complete", s.authorize(http.HandlerFunc(s.completeLease)))
 	return s.cors(mux)
 }
+
 // proxyChatCompletion forwards one OpenAI-compatible request to a registered,
 // recently-heartbeating inference worker. The coordinator handles request-level
 // routing only; model activations and KV-cache traffic never pass through it.
