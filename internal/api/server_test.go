@@ -307,3 +307,29 @@ func TestInferenceSessionNotFound(t *testing.T) {
 		t.Fatalf("status=%d want %d", result.Code, http.StatusNotFound)
 	}
 }
+
+func TestInferenceMetricsAggregateProxyRequestsByWorker(t *testing.T) {
+	native := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer native.Close()
+	store := jobs.NewMemoryStore()
+	worker, err := store.RegisterInferenceWorker("metrics-worker", 2, 2048, "llama.cpp", "test.gguf", native.URL, []string{"chat-completions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(store)
+	handler := server.Handler()
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/workers/"+worker.ID+"/chat/completions", strings.NewReader(`{"messages":[]}`))
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, req)
+		if result.Code != http.StatusOK {
+			t.Fatalf("request status=%d body=%s", result.Code, result.Body.String())
+		}
+	}
+	metrics := server.metrics.Snapshot()
+	if len(metrics) != 1 || metrics[0].WorkerID != worker.ID || metrics[0].RequestsTotal != 2 || metrics[0].Successes != 2 || metrics[0].InFlight != 0 {
+		t.Fatalf("unexpected worker metrics: %+v", metrics)
+	}
+}
