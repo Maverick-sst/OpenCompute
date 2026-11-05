@@ -14,8 +14,14 @@ type Dataset = { id: string; filename: string; size_bytes: number; record_count:
 type Worker = {
   id: string;
   name: string;
+  kind?: "compute" | "inference";
   cpu_cores: number;
   memory_mb: number;
+  runtime?: string;
+  model?: string;
+  inference_endpoint?: string;
+  operations?: string[];
+  registered_at?: string;
   last_seen_at: string;
 };
 
@@ -113,6 +119,8 @@ export default function App() {
   const activeWorkers = workers.filter(
     (worker) => Date.now() - new Date(worker.last_seen_at).getTime() < 30_000,
   ).length;
+  const inferenceWorkers = workers.filter((worker) => worker.kind === "inference").length;
+  const computeWorkers = workers.length - inferenceWorkers;
   const completedBatches = jobs.reduce(
     (sum, job) => sum + job.batches.filter((batch) => batch.status === "completed").length,
     0,
@@ -150,7 +158,8 @@ export default function App() {
       {error && <div className="error">{error}. Check the API URL, token, and OCF_ALLOWED_ORIGINS.</div>}
 
       <section className="stats">
-        <article className="stat panel"><span>Registered workers</span><strong>{workers.length}</strong><small>{activeWorkers} seen in the last 30 seconds</small></article>
+        <article className="stat panel"><span>Registered workers</span><strong>{workers.length}</strong><small>{activeWorkers} heartbeats in the last 30 seconds</small></article>
+        <article className="stat panel"><span>Inference nodes</span><strong>{inferenceWorkers}</strong><small>{computeWorkers} compute-only nodes</small></article>
         <article className="stat panel"><span>Jobs submitted</span><strong>{jobs.length}</strong><small>Across this coordinator</small></article>
         <article className="stat panel"><span>Batches completed</span><strong>{completedBatches}<em> / {totalBatches}</em></strong><small>Completed batch leases</small></article>
       </section>
@@ -176,8 +185,25 @@ export default function App() {
                 const online = Date.now() - new Date(worker.last_seen_at).getTime() < 30_000;
                 return <div className="worker-row" key={worker.id}>
                   <span className={online ? "dot" : "dot offline"} />
-                  <div className="worker-name"><strong>{worker.name || "Unnamed worker"}</strong><small>{worker.cpu_cores} CPU cores · {worker.memory_mb} MB advertised</small></div>
-                  <span className="state">{online ? "Active" : "Idle"}</span>
+                  <div className="worker-name">
+                    <div className="worker-title">
+                      <strong>{worker.name || "Unnamed worker"}</strong>
+                      <span className={worker.kind === "inference" ? "worker-kind inference" : "worker-kind"}>{worker.kind === "inference" ? "INFERENCE" : "COMPUTE"}</span>
+                    </div>
+                    <small>{worker.cpu_cores} CPU cores · {worker.memory_mb.toLocaleString()} MB advertised</small>
+                    {worker.kind === "inference" && (
+                      <small className="worker-runtime">
+                        {worker.runtime || "Runtime unknown"} · {worker.model || "Model unknown"}
+                      </small>
+                    )}
+                    {worker.kind === "inference" && worker.operations && worker.operations.length > 0 && (
+                      <div className="operation-list">{worker.operations.map((operation) => <span key={operation}>{operation}</span>)}</div>
+                    )}
+                    {worker.kind === "inference" && worker.inference_endpoint && (
+                      <small className="worker-endpoint" title={worker.inference_endpoint}>{worker.inference_endpoint}</small>
+                    )}
+                  </div>
+                  <span className="state">{online ? "Active" : "Stale"}</span>
                 </div>;
               })}
             </div>
