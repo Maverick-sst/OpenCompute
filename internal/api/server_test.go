@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Maverick-sst/OpenCompute/internal/jobs"
 	"github.com/Maverick-sst/OpenCompute/internal/inference"
+	"github.com/Maverick-sst/OpenCompute/internal/jobs"
 )
 
 func TestCreateAndGetJob(t *testing.T) {
