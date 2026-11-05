@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"crypto/subtle"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -32,9 +32,9 @@ type registration struct {
 
 type workerAgent struct {
 	base, token, name, model, endpoint, localEndpoint string
-	cores                              int
-	memoryMB                           int64
-	client                             *http.Client
+	cores                                              int
+	memoryMB                                           int64
+	client                                             *http.Client
 }
 
 func main() {
@@ -82,10 +82,10 @@ func main() {
 		token:    *token,
 		name:     *name,
 		model:    baseName(*model),
-		endpoint: sup.Endpoint(),
+		endpoint:      sup.Endpoint(),
 		localEndpoint: sup.Endpoint(),
-		cores:    *threads,
-		memoryMB: *memory,
+		cores:         *threads,
+		memoryMB:      *memory,
 		client:   &http.Client{Timeout: 5 * time.Second},
 	}
 	if *advertiseEndpoint != "" {
