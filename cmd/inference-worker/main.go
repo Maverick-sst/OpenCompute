@@ -149,7 +149,6 @@ func main() {
 	log.Printf("OpenCompute inference worker stopped")
 }
 
-
 func (a *workerAgent) authorizeWorker(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.token != "" {
