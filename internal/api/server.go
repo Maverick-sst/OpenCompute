@@ -106,7 +106,6 @@ func (s *Server) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
 		req.URL.RawPath = ""
 		req.URL.RawQuery = ""
 		req.Host = target.Host
-		req.Header.Del("Authorization")
 		req.Header.Set("Content-Type", "application/json")
 	}
 	proxy.FlushInterval = -1
