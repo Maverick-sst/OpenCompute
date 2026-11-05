@@ -115,7 +115,7 @@ func TestProxyChatCompletionToRegisteredInferenceWorker(t *testing.T) {
 	result := httptest.NewRecorder()
 	handler.ServeHTTP(result, req)
 	if result.Code != http.StatusOK { t.Fatalf("status=%d body=%s", result.Code, result.Body.String()) }
-	if gotAuthorization != "" { t.Fatalf("coordinator authorization leaked upstream: %q", gotAuthorization) }
+	if gotAuthorization != "Bearer coordinator-secret" { t.Fatalf("worker gateway did not receive coordinator authorization: %q", gotAuthorization) }
 	if !strings.Contains(result.Body.String(), "chatcmpl-test") { t.Fatalf("unexpected upstream response: %s", result.Body.String()) }
 }
 
