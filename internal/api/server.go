@@ -29,6 +29,7 @@ type Server struct {
 	routeMu      sync.Mutex
 	routeIndex   int
 	sessions     *inference.SessionManager
+	metrics      *inference.Metrics
 }
 
 func NewServer(store jobs.Store) *Server {
@@ -43,7 +44,7 @@ func NewServerWithToken(store jobs.Store, token string) *Server {
 	if err != nil {
 		panic(err)
 	}
-	return &Server{store: store, token: token, datasets: manager, datasetsRoot: filepath.Clean(root), sessions: inference.NewSessionManager()}
+	return &Server{store: store, token: token, datasets: manager, datasetsRoot: filepath.Clean(root), sessions: inference.NewSessionManager(), metrics: inference.NewMetrics()}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -56,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/jobs", s.authorize(http.HandlerFunc(s.listJobs)))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authorize(http.HandlerFunc(s.getJob)))
 	mux.Handle("GET /api/v1/workers", s.authorize(http.HandlerFunc(s.listWorkers)))
+	mux.Handle("GET /api/v1/metrics/inference", s.authorize(http.HandlerFunc(s.inferenceMetrics)))
 	mux.Handle("POST /api/v1/inference/chat/completions", s.authorize(http.HandlerFunc(s.proxyChatCompletion)))
 	mux.Handle("POST /api/v1/inference/sessions", s.authorize(http.HandlerFunc(s.createInferenceSession)))
 	mux.Handle("GET /api/v1/inference/sessions/{id}", s.authorize(http.HandlerFunc(s.getInferenceSession)))
@@ -147,7 +149,14 @@ func (s *Server) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(rw, http.StatusBadGateway, "inference worker request failed: "+proxyErr.Error())
 	}
-	proxy.ServeHTTP(w, r)
+	tracked := &statusRecorder{ResponseWriter: w}
+	finish := s.metrics.Begin(selected.ID)
+	proxy.ServeHTTP(tracked, r)
+	status := tracked.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	finish(status)
 }
 
 func (s *Server) eligibleInferenceWorkers() []jobs.Worker {
@@ -237,6 +246,10 @@ func hasOperation(operations []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Server) inferenceMetrics(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, _ *http.Request) {
