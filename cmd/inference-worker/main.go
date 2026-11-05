@@ -10,9 +10,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"crypto/subtle"
 	"net/http/httputil"
 	"net/url"
-	"crypto/subtle"
 	"os"
 	"os/signal"
 	"strconv"
@@ -88,7 +88,9 @@ func main() {
 		memoryMB: *memory,
 		client:   &http.Client{Timeout: 5 * time.Second},
 	}
-	if *advertiseEndpoint != "" { agent.endpoint = strings.TrimRight(*advertiseEndpoint, "/") }
+	if *advertiseEndpoint != "" {
+		agent.endpoint = strings.TrimRight(*advertiseEndpoint, "/")
+	}
 	if agent.base == "" {
 		log.Fatal("coordinator URL is required")
 	}
@@ -167,14 +169,9 @@ func (a *workerAgent) proxyChatCompletion(w http.ResponseWriter, r *http.Request
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	target, err := url.Parse(a.endpoint)
-	if err != nil {
-		http.Error(w, "invalid native inference endpoint", http.StatusBadGateway)
-		return
-	}
 	// The advertised endpoint may be a LAN address. The native process itself
 	// remains bound to loopback; use the supervisor's local endpoint here.
-	target, err = url.Parse(strings.TrimRight(a.localEndpoint, "/"))
+	target, err := url.Parse(strings.TrimRight(a.localEndpoint, "/"))
 	if err != nil {
 		http.Error(w, "invalid local inference endpoint", http.StatusBadGateway)
 		return
