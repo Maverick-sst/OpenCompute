@@ -39,6 +39,10 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [selectedInferenceWorker, setSelectedInferenceWorker] = useState("");
+  const [inferencePrompt, setInferencePrompt] = useState("Explain how OpenCompute distributes inference requests.");
+  const [inferenceOutput, setInferenceOutput] = useState("");
+  const [inferenceBusy, setInferenceBusy] = useState(false);
 
   const headers = useMemo(() => {
     const value: Record<string, string> = { "Content-Type": "application/json" };
@@ -119,6 +123,11 @@ export default function App() {
   const activeWorkers = workers.filter(
     (worker) => Date.now() - new Date(worker.last_seen_at).getTime() < 30_000,
   ).length;
+  const availableInferenceWorkers = workers.filter((worker) =>
+    worker.kind === "inference" &&
+    Date.now() - new Date(worker.last_seen_at).getTime() < 30_000 &&
+    worker.operations?.includes("chat-completions"),
+  );
   const inferenceWorkers = workers.filter((worker) => worker.kind === "inference").length;
   const computeWorkers = workers.length - inferenceWorkers;
   const completedBatches = jobs.reduce(
@@ -126,6 +135,39 @@ export default function App() {
     0,
   );
   const totalBatches = jobs.reduce((sum, job) => sum + job.batches.length, 0);
+
+  async function runInference(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const worker = availableInferenceWorkers.find((item) => item.id === selectedInferenceWorker) ?? availableInferenceWorkers[0];
+    if (!worker) {
+      setError("No healthy inference worker advertises chat-completions");
+      return;
+    }
+    setInferenceBusy(true);
+    setInferenceOutput("");
+    setError("");
+    try {
+      const response = await fetch(`${apiBase.trim().replace(/\\/$/, "")}/api/v1/inference/workers/${worker.id}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: worker.model,
+          messages: [{ role: "user", content: inferencePrompt }],
+          temperature: 0,
+          max_tokens: 128,
+          stream: false,
+        }),
+      });
+      if (!response.ok) throw new Error(`Inference request failed (${response.status}): ${await response.text()}`);
+      const result = await response.json() as { choices?: { message?: { content?: string } }[] };
+      setInferenceOutput(result.choices?.[0]?.message?.content ?? JSON.stringify(result, null, 2));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Inference request failed");
+    } finally {
+      setInferenceBusy(false);
+    }
+  }
+
 
   return (
     <main className="shell">
@@ -162,6 +204,30 @@ export default function App() {
         <article className="stat panel"><span>Inference nodes</span><strong>{inferenceWorkers}</strong><small>{computeWorkers} compute-only nodes</small></article>
         <article className="stat panel"><span>Jobs submitted</span><strong>{jobs.length}</strong><small>Across this coordinator</small></article>
         <article className="stat panel"><span>Batches completed</span><strong>{completedBatches}<em> / {totalBatches}</em></strong><small>Completed batch leases</small></article>
+      </section>
+
+      <section className="panel section inference-console">
+        <div className="section-heading">
+          <div><div className="eyebrow">REQUEST-LEVEL INFERENCE · M2</div><h2>Run an inference request</h2></div>
+          <span className="count">{availableInferenceWorkers.length} ready</span>
+        </div>
+        <form onSubmit={runInference} className="inference-form">
+          <label>Inference worker
+            <select value={selectedInferenceWorker} onChange={(event) => setSelectedInferenceWorker(event.target.value)}>
+              <option value="">Auto-select first healthy worker</option>
+              {availableInferenceWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.model}</option>)}
+            </select>
+          </label>
+          <label>Prompt
+            <textarea value={inferencePrompt} onChange={(event) => setInferencePrompt(event.target.value)} rows={3} required />
+          </label>
+          <button type="submit" disabled={inferenceBusy || availableInferenceWorkers.length === 0 || !inferencePrompt.trim()}>
+            {inferenceBusy ? "Generating…" : "Send inference request ↗"}
+          </button>
+        </form>
+        {availableInferenceWorkers.length === 0 && <p className="hint">Start a healthy inference worker that advertises chat-completions to enable this console.</p>}
+        {inferenceOutput && <div className="inference-output"><div className="eyebrow">MODEL RESPONSE</div><p>{inferenceOutput}</p></div>}
+        <p className="hint">The coordinator authenticates and forwards the request to the selected worker. Native inference stays on the worker; activation and KV-cache traffic are not routed through the coordinator.</p>
       </section>
 
       <section className="content-grid">
