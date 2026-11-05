@@ -11,6 +11,8 @@ type Job = {
 
 type Dataset = { id: string; filename: string; size_bytes: number; record_count: number; checksum: string; status: string; partitions: number };
 
+type InferenceMetric = { worker_id: string; requests_total: number; successes: number; failures: number; in_flight: number; average_latency_ms: number; last_status?: number; last_request_at?: string };
+
 type Worker = {
   id: string;
   name: string;
@@ -32,6 +34,7 @@ export default function App() {
   const [token, setToken] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [inferenceMetrics, setInferenceMetrics] = useState<InferenceMetric[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [uploading, setUploading] = useState(false);
   const [totalItems, setTotalItems] = useState("1000000");
@@ -43,6 +46,10 @@ export default function App() {
   const [inferencePrompt, setInferencePrompt] = useState("Explain how OpenCompute distributes inference requests.");
   const [inferenceOutput, setInferenceOutput] = useState("");
   const [inferenceBusy, setInferenceBusy] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+  const [sessionWorkerId, setSessionWorkerId] = useState("");
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  const [conversation, setConversation] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
 
   const headers = useMemo(() => {
     const value: Record<string, string> = { "Content-Type": "application/json" };
@@ -55,19 +62,22 @@ export default function App() {
     setError("");
     try {
       const base = apiBase.trim().replace(/\/$/, "");
-      const [jobResponse, workerResponse] = await Promise.all([
+      const [jobResponse, workerResponse, metricsResponse] = await Promise.all([
         fetch(`${base}/api/v1/jobs`, { headers }),
         fetch(`${base}/api/v1/workers`, { headers }),
+        fetch(`${base}/api/v1/metrics/inference`, { headers }),
       ]);
-      if (!jobResponse.ok || !workerResponse.ok) {
+      if (!jobResponse.ok || !workerResponse.ok || !metricsResponse.ok) {
         throw new Error(`Coordinator returned ${jobResponse.status}/${workerResponse.status}`);
       }
-      const [jobData, workerData] = await Promise.all([
+      const [jobData, workerData, metricsData] = await Promise.all([
         jobResponse.json() as Promise<Job[]>,
         workerResponse.json() as Promise<Worker[]>,
+        metricsResponse.json() as Promise<InferenceMetric[]>,
       ]);
       setJobs(jobData);
       setWorkers(workerData);
+      setInferenceMetrics(metricsData);
       setLastUpdated(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to reach coordinator");
@@ -130,35 +140,65 @@ export default function App() {
   );
   const inferenceWorkers = workers.filter((worker) => worker.kind === "inference").length;
   const computeWorkers = workers.length - inferenceWorkers;
+  const totalInferenceRequests = inferenceMetrics.reduce((sum, item) => sum + item.requests_total, 0);
+  const totalInferenceFailures = inferenceMetrics.reduce((sum, item) => sum + item.failures, 0);
+  const metricsByWorker = new Map(inferenceMetrics.map((item) => [item.worker_id, item]));
   const completedBatches = jobs.reduce(
     (sum, job) => sum + job.batches.filter((batch) => batch.status === "completed").length,
     0,
   );
   const totalBatches = jobs.reduce((sum, job) => sum + job.batches.length, 0);
 
+  async function createInferenceSession() {
+    setError("");
+    try {
+      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}/api/v1/inference/sessions`, {
+        method: "POST",
+        headers,
+      });
+      if (!response.ok) throw new Error(`Session creation failed (${response.status}): ${await response.text()}`);
+      const session = await response.json() as { id: string; worker_id: string; epoch: number };
+      setSessionId(session.id);
+      setSessionWorkerId(session.worker_id);
+      setSessionEpoch(session.epoch);
+      setConversation([]);
+      setInferenceOutput("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create inference session");
+    }
+  }
+
   async function runInference(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const worker = selectedInferenceWorker
       ? availableInferenceWorkers.find((item) => item.id === selectedInferenceWorker)
       : undefined;
-    if (selectedInferenceWorker && !worker) {
+    if (!sessionId && selectedInferenceWorker && !worker) {
       setError("The selected inference worker is no longer healthy");
       return;
     }
-    if (availableInferenceWorkers.length === 0) {
+    if (!sessionId && availableInferenceWorkers.length === 0) {
       setError("No healthy inference worker advertises chat-completions");
       return;
     }
     setInferenceBusy(true);
     setInferenceOutput("");
     setError("");
+    const messages = sessionId
+      ? [...conversation, { role: "user" as const, content: inferencePrompt }]
+      : [{ role: "user" as const, content: inferencePrompt }];
     try {
-      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}${worker ? `/api/v1/inference/workers/${worker.id}/chat/completions` : "/api/v1/inference/chat/completions"}`, {
+      const path = sessionId
+        ? `/api/v1/inference/sessions/${sessionId}/chat/completions`
+        : worker
+          ? `/api/v1/inference/workers/${worker.id}/chat/completions`
+          : "/api/v1/inference/chat/completions";
+      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}${path}`, {
         method: "POST",
         headers,
         body: JSON.stringify({
           model: worker?.model ?? "opencompute",
-          messages: [{ role: "user", content: inferencePrompt }],
+          messages,
           temperature: 0,
           max_tokens: 128,
           stream: false,
@@ -166,14 +206,20 @@ export default function App() {
       });
       if (!response.ok) throw new Error(`Inference request failed (${response.status}): ${await response.text()}`);
       const result = await response.json() as { choices?: { message?: { content?: string } }[] };
-      setInferenceOutput(result.choices?.[0]?.message?.content ?? JSON.stringify(result, null, 2));
+      const answer = result.choices?.[0]?.message?.content ?? JSON.stringify(result, null, 2);
+      setInferenceOutput(answer);
+      if (sessionId) {
+        setConversation([...messages, { role: "assistant", content: answer }]);
+        const epoch = Number(response.headers.get("X-OpenCompute-Session-Epoch") || sessionEpoch);
+        setSessionEpoch(epoch);
+      }
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Inference request failed");
     } finally {
       setInferenceBusy(false);
     }
   }
-
 
   return (
     <main className="shell">
@@ -210,6 +256,7 @@ export default function App() {
         <article className="stat panel"><span>Inference nodes</span><strong>{inferenceWorkers}</strong><small>{computeWorkers} compute-only nodes</small></article>
         <article className="stat panel"><span>Jobs submitted</span><strong>{jobs.length}</strong><small>Across this coordinator</small></article>
         <article className="stat panel"><span>Batches completed</span><strong>{completedBatches}<em> / {totalBatches}</em></strong><small>Completed batch leases</small></article>
+        <article className="stat panel"><span>Inference requests</span><strong>{totalInferenceRequests}</strong><small>{totalInferenceFailures} failed · coordinator totals</small></article>
       </section>
 
       <section className="panel section inference-console">
@@ -219,7 +266,7 @@ export default function App() {
         </div>
         <form onSubmit={runInference} className="inference-form">
           <label>Inference worker
-            <select value={selectedInferenceWorker} onChange={(event) => setSelectedInferenceWorker(event.target.value)}>
+            <select value={selectedInferenceWorker} disabled={Boolean(sessionId)} onChange={(event) => setSelectedInferenceWorker(event.target.value)}>
               <option value="">Auto-select first healthy worker</option>
               {availableInferenceWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.model}</option>)}
             </select>
@@ -233,7 +280,7 @@ export default function App() {
         </form>
         {availableInferenceWorkers.length === 0 && <p className="hint">Start a healthy inference worker that advertises chat-completions to enable this console.</p>}
         {inferenceOutput && <div className="inference-output"><div className="eyebrow">MODEL RESPONSE</div><p>{inferenceOutput}</p></div>}
-        <p className="hint">The coordinator authenticates and forwards the request to the selected worker. Native inference stays on the worker; activation and KV-cache traffic are not routed through the coordinator.</p>
+        <p className="hint">The coordinator routes independent requests or pins a session to one worker. Session recovery replays the client-supplied message history; native KV-cache migration is not implemented.</p>
       </section>
 
       <section className="content-grid">
@@ -270,6 +317,11 @@ export default function App() {
                     )}
                     {worker.kind === "inference" && worker.operations && worker.operations.length > 0 && (
                       <div className="operation-list">{worker.operations.map((operation) => <span key={operation}>{operation}</span>)}</div>
+                    )}
+                    {worker.kind === "inference" && metricsByWorker.has(worker.id) && (
+                      <small className="worker-metrics">
+                        {metricsByWorker.get(worker.id)?.requests_total ?? 0} requests · {metricsByWorker.get(worker.id)?.failures ?? 0} failures · {(metricsByWorker.get(worker.id)?.average_latency_ms ?? 0).toFixed(0)} ms avg
+                      </small>
                     )}
                     {worker.kind === "inference" && worker.inference_endpoint && (
                       <small className="worker-endpoint" title={worker.inference_endpoint}>{worker.inference_endpoint}</small>

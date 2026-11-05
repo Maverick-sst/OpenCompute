@@ -52,6 +52,27 @@ Pin a request to a worker by using its coordinator worker ID:
 POST /api/v1/inference/workers/WORKER_ID/chat/completions
 ```
 
+## Sessions and recovery
+
+Create a coordinator session with `POST /api/v1/inference/sessions`, then send turns to `POST /api/v1/inference/sessions/{id}/chat/completions`. Sessions are pinned to one healthy worker. If a worker is lost, the next request is assigned to another worker and the session epoch increments. The client must resend the full conversation history. See [SESSION-SEMANTICS.md](SESSION-SEMANTICS.md).
+
+This is routing affinity and client-assisted replay metadata, **not KV-cache migration**. Session records are in-memory and are lost on coordinator restart. A failed in-flight generation is returned as an error and is not retried automatically.
+
+## Metrics and benchmark
+
+Authenticated `GET /api/v1/metrics/inference` returns per-worker request totals, successes, failures, in-flight requests, average latency, last status and last request time.
+
+Run a concurrent request-level benchmark from the repository root:
+
+```bash
+python3 experiments/inference/m2/benchmark.py \
+  --url http://COORDINATOR_LAN_IP:8080/api/v1/inference/chat/completions \
+  --token "$OCF_API_TOKEN" \
+  --requests 40 --concurrency 4 --max-tokens 96
+```
+
+The script reports request success/failure counts, mean/median/p95 latency, aggregate requests/sec and completion tokens/sec (when the upstream reports token usage). Run several concurrency levels and compare identical model, prompt and decoding settings. This is request-level throughput; it is not a model-parallel benchmark.
+
 ## Operational semantics and limitations
 
 - Round-robin is request-level distribution, not load-aware placement. It does not measure queue depth, CPU pressure, model memory or network throughput.
@@ -72,6 +93,9 @@ POST /api/v1/inference/workers/WORKER_ID/chat/completions
 - [x] Coordinator request authentication is enforced when configured.
 - [x] Worker gateway authenticates forwarded requests and strips the shared token before calling llama-server.
 - [x] Native runtime remains loopback-bound.
+- [x] Sessions pin to one worker and increment an epoch when reassigned.
+- [x] Per-worker request telemetry is exposed to the dashboard.
+- [x] A concurrent request-level benchmark harness is included.
 - [ ] Validate end-to-end from the MacBook dashboard to a Linux worker on the user's private LAN.
 - [ ] Run multiple workers and confirm round-robin distribution with per-worker request counters/logs.
 - [ ] Benchmark aggregate throughput with independent requests.
