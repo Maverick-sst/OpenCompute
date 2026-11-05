@@ -18,7 +18,7 @@ From the OpenCompute repository root:
 
 ```bash
 bash experiments/inference/m1/build-llama-server.sh
-gofmt -w internal/inference cmd/inference-worker internal/jobs internal/api
+gofmt -w $(find internal/inference cmd/inference-worker internal/jobs internal/api -name '*.go' -type f)
 go test ./...
 go vet ./...
 ```
