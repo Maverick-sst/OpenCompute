@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Maverick-sst/OpenCompute/internal/dataset"
@@ -23,6 +24,8 @@ type Server struct {
 	token        string
 	datasets     *dataset.Manager
 	datasetsRoot string
+	routeMu sync.Mutex
+	routeIndex int
 }
 
 func NewServer(store jobs.Store) *Server {
@@ -50,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/jobs", s.authorize(http.HandlerFunc(s.listJobs)))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authorize(http.HandlerFunc(s.getJob)))
 	mux.Handle("GET /api/v1/workers", s.authorize(http.HandlerFunc(s.listWorkers)))
+	mux.Handle("POST /api/v1/inference/chat/completions", s.authorize(http.HandlerFunc(s.proxyChatCompletion)))
 	mux.Handle("POST /api/v1/inference/workers/{id}/chat/completions", s.authorize(http.HandlerFunc(s.proxyChatCompletion)))
 	mux.Handle("POST /api/v1/workers", s.authorize(http.HandlerFunc(s.registerWorker)))
 	mux.Handle("POST /api/v1/workers/{id}/heartbeat", s.authorize(http.HandlerFunc(s.heartbeat)))
@@ -67,18 +71,37 @@ func (s *Server) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	workerID := strings.TrimSpace(r.PathValue("id"))
-	var selected *jobs.Worker
 	now := time.Now().UTC()
-	for _, worker := range s.store.ListWorkers() {
-		if worker.ID == workerID {
-			copy := worker
-			selected = &copy
-			break
+	var selected *jobs.Worker
+	workers := s.store.ListWorkers()
+	if workerID != "" {
+		for _, worker := range workers {
+			if worker.ID == workerID {
+				copy := worker
+				selected = &copy
+				break
+			}
 		}
-	}
-	if selected == nil {
-		writeError(w, http.StatusNotFound, "inference worker not found")
-		return
+		if selected == nil {
+			writeError(w, http.StatusNotFound, "inference worker not found")
+			return
+		}
+	} else {
+		eligible := make([]jobs.Worker, 0, len(workers))
+		for _, worker := range workers {
+			if worker.Kind == "inference" && now.Sub(worker.LastSeenAt) <= 30*time.Second && hasOperation(worker.Operations, "chat-completions") {
+				eligible = append(eligible, worker)
+			}
+		}
+		if len(eligible) == 0 {
+			writeError(w, http.StatusServiceUnavailable, "no healthy inference worker advertises chat-completions")
+			return
+		}
+		s.routeMu.Lock()
+		chosen := eligible[s.routeIndex%len(eligible)]
+		s.routeIndex++
+		s.routeMu.Unlock()
+		selected = &chosen
 	}
 	if selected.Kind != "inference" {
 		writeError(w, http.StatusUnprocessableEntity, "worker is not an inference worker")
