@@ -141,6 +141,19 @@ func (s *FileStore) RegisterWorker(name string, cores int, mem int64) (Worker, e
 	}
 	return w, nil
 }
+func (s *FileStore) RegisterInferenceWorker(name string, cores int, mem int64, runtime, model, endpoint string, operations []string) (Worker, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.memory.RegisterInferenceWorker(name, cores, mem, runtime, model, endpoint, operations)
+	if err != nil {
+		return Worker{}, err
+	}
+	if err := s.persist(); err != nil {
+		return Worker{}, err
+	}
+	return w, nil
+}
+
 func (s *FileStore) Heartbeat(id string) (Worker, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

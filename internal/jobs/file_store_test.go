@@ -54,3 +54,19 @@ func TestFileStorePersistsJobsWorkersAndLeases(t *testing.T) {
 		t.Fatalf("result not restored: %+v", final.Batches[0])
 	}
 }
+
+func TestFileStorePersistsInferenceCapabilities(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "ocf.json")
+	first, err := OpenFileStore(path)
+	if err != nil { t.Fatal(err) }
+	created, err := first.RegisterInferenceWorker("qwen-node", 2, 4096, "llama.cpp", "qwen2.5-0.5b-instruct-q4_k_m.gguf", "http://127.0.0.1:8081", []string{"chat-completions", "completion"})
+	if err != nil { t.Fatal(err) }
+	second, err := OpenFileStore(path)
+	if err != nil { t.Fatal(err) }
+	workers := second.ListWorkers()
+	if len(workers) != 1 { t.Fatalf("got %d workers, want 1", len(workers)) }
+	got := workers[0]
+	if got.ID != created.ID || got.Kind != "inference" || got.Runtime != "llama.cpp" || got.Model != created.Model || got.InferenceEndpoint != created.InferenceEndpoint || len(got.Operations) != 2 {
+		t.Fatalf("inference capabilities not restored: %+v", got)
+	}
+}
