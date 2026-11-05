@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,12 +50,81 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/jobs", s.authorize(http.HandlerFunc(s.listJobs)))
 	mux.Handle("GET /api/v1/jobs/{id}", s.authorize(http.HandlerFunc(s.getJob)))
 	mux.Handle("GET /api/v1/workers", s.authorize(http.HandlerFunc(s.listWorkers)))
+	mux.Handle("POST /api/v1/inference/workers/{id}/chat/completions", s.authorize(http.HandlerFunc(s.proxyChatCompletion)))
 	mux.Handle("POST /api/v1/workers", s.authorize(http.HandlerFunc(s.registerWorker)))
 	mux.Handle("POST /api/v1/workers/{id}/heartbeat", s.authorize(http.HandlerFunc(s.heartbeat)))
 	mux.Handle("POST /api/v1/workers/{id}/leases", s.authorize(http.HandlerFunc(s.leaseNext)))
 	mux.Handle("POST /api/v1/leases/{id}/complete", s.authorize(http.HandlerFunc(s.completeLease)))
 	return s.cors(mux)
 }
+// proxyChatCompletion forwards one OpenAI-compatible request to a registered,
+// recently-heartbeating inference worker. The coordinator handles request-level
+// routing only; model activations and KV-cache traffic never pass through it.
+func (s *Server) proxyChatCompletion(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > 1<<20 {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds 1 MiB")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	workerID := strings.TrimSpace(r.PathValue("id"))
+	var selected *jobs.Worker
+	now := time.Now().UTC()
+	for _, worker := range s.store.ListWorkers() {
+		if worker.ID == workerID {
+			copy := worker
+			selected = &copy
+			break
+		}
+	}
+	if selected == nil {
+		writeError(w, http.StatusNotFound, "inference worker not found")
+		return
+	}
+	if selected.Kind != "inference" {
+		writeError(w, http.StatusUnprocessableEntity, "worker is not an inference worker")
+		return
+	}
+	if now.Sub(selected.LastSeenAt) > 30*time.Second {
+		writeError(w, http.StatusServiceUnavailable, "inference worker heartbeat is stale")
+		return
+	}
+	if !hasOperation(selected.Operations, "chat-completions") {
+		writeError(w, http.StatusUnprocessableEntity, "worker does not advertise chat-completions")
+		return
+	}
+	target, err := url.Parse(selected.InferenceEndpoint)
+	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" {
+		writeError(w, http.StatusBadGateway, "worker has an invalid inference endpoint")
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Method = http.MethodPost
+		req.URL.Path = strings.TrimRight(target.Path, "/") + "/v1/chat/completions"
+		req.URL.RawPath = ""
+		req.URL.RawQuery = ""
+		req.Host = target.Host
+		req.Header.Del("Authorization")
+		req.Header.Set("Content-Type", "application/json")
+	}
+	proxy.FlushInterval = -1
+	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, proxyErr error) {
+		writeError(rw, http.StatusBadGateway, "inference worker request failed: "+proxyErr.Error())
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+func hasOperation(operations []string, expected string) bool {
+	for _, operation := range operations {
+		if operation == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) listJobs(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, s.store.ListJobs())
 }
