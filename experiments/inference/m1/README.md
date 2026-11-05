@@ -1,67 +1,75 @@
-# M1 — Persistent native inference service
+# M1 — Persistent native inference worker
 
-M1 starts with a persistent single-model inference process. It is deliberately separate from the Go coordinator: first prove that the native runtime can stay loaded, serve repeated requests, expose health, and shut down cleanly. Coordinator registration and scheduling come later.
+M1 turns the local llama.cpp runtime into a supervised OpenCompute inference worker and registers its capabilities with the existing coordinator. The Go coordinator remains a control plane; prompts and model execution stay on the worker's native HTTP endpoint.
 
-## Current lab assumptions
+## Lab assumptions
 
 - llama.cpp checkout: `~/src/llama.cpp`
 - pinned runtime commit: `2bc46baa9207d098d03741ac394e7faaf1a955b6`
 - build directory: `build-opencompute`
 - smoke-test model: `~/models/opencompute/qwen2.5-0.5b-instruct-q4_k_m.gguf`
 - native inference bind: `127.0.0.1:8081`
-- supervisor health bind: `127.0.0.1:8090`
-- CPU threads: 2 (conservative on the 4-core host)
+- worker health bind: `127.0.0.1:8090`
+- CPU threads: 2
 
-## 1. Build llama-server
+## Build and test
 
 From the OpenCompute repository root:
 
 ```bash
 bash experiments/inference/m1/build-llama-server.sh
-```
-
-This builds the upstream `llama-server` target in the existing pinned checkout with at most two parallel jobs. It does not modify or vendor llama.cpp into this repository.
-
-## 2. Run the native server directly (smoke-test path)
-
-```bash
-bash experiments/inference/m1/run-llama-server.sh
-```
-
-The server loads the GGUF model once and remains running. It must bind only to loopback during this milestone.
-
-## 3. Run the Go supervisor
-
-Stop the directly launched llama-server first with Ctrl+C. Then, from the OpenCompute repository root:
-
-```bash
-gofmt -w internal/inference/supervisor.go internal/inference/supervisor_test.go cmd/inference-worker/main.go
+gofmt -w internal/inference cmd/inference-worker internal/jobs internal/api
 go test ./...
-go run ./cmd/inference-worker
+go vet ./...
 ```
 
-The Go process starts llama-server as a child, waits for its `/health` endpoint to report `{"status":"ok"}`, and exposes its own status at `http://127.0.0.1:8090/healthz`. It forwards child stdout/stderr to the terminal and shuts the child down on Ctrl+C/SIGTERM.
+## Start the coordinator
 
-Optional overrides:
+Use a local token for the lab. Keep the coordinator on loopback for this experiment:
 
 ```bash
+export OCF_API_TOKEN='replace-with-a-local-development-token'
+export OCF_ADDR='127.0.0.1:8080'
+go run ./cmd/coordinator
+```
+
+In another terminal, use the same token and start the inference worker:
+
+```bash
+export OCF_API_TOKEN='replace-with-a-local-development-token'
 go run ./cmd/inference-worker \
+  -coordinator http://127.0.0.1:8080 \
   -llama-server "$HOME/src/llama.cpp/build-opencompute/bin/llama-server" \
   -model "$HOME/models/opencompute/qwen2.5-0.5b-instruct-q4_k_m.gguf" \
   -native-host 127.0.0.1 -native-port 8081 \
-  -host 127.0.0.1 -port 8090 -threads 2 -ctx-size 2048
+  -host 127.0.0.1 -port 8090 -threads 2 -ctx-size 2048 \
+  -heartbeat 5s -memory-mb 1024
 ```
 
-Supervisor status:
+The worker loads the model first, registers itself as `kind=inference`, and sends coordinator heartbeats every five seconds. Registration includes runtime, model filename, inference endpoint and supported operations. The default registration is local-lab only: the advertised endpoint is loopback and is reachable only from the same host.
+
+## Verify registration and health
 
 ```bash
+curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/workers \
+  -H "Authorization: Bearer $OCF_API_TOKEN"
 curl --fail --silent --show-error http://127.0.0.1:8090/healthz
 curl --fail --silent --show-error http://127.0.0.1:8090/status
 ```
 
-The native llama.cpp API remains available at `http://127.0.0.1:8081`.
+Expected worker metadata includes:
 
-## 4. Verify native inference through the supervised process
+- `kind: inference`
+- `runtime: llama.cpp`
+- model filename
+- `inference_endpoint: http://127.0.0.1:8081`
+- `operations: ["chat-completions", "completion"]`
+- `last_seen_at`, refreshed by heartbeat
+
+Existing clients that omit `kind` continue to register as `compute`. The synthetic lease protocol is unchanged. The registry currently records last-seen timestamps but does not expire or deregister stale workers.
+
+## Verify inference
 
 ```bash
 curl --fail --silent --show-error http://127.0.0.1:8081/v1/chat/completions \
@@ -69,35 +77,39 @@ curl --fail --silent --show-error http://127.0.0.1:8081/v1/chat/completions \
   -d '{"model":"opencompute-local","messages":[{"role":"user","content":"Explain OpenCompute in one sentence."}],"temperature":0,"max_tokens":64,"stream":false}'
 ```
 
-Run the same request again. The model should remain loaded between requests.
+Run it twice to verify the model remains loaded. The coordinator does not proxy this request.
 
-## 5. Record service behaviour
+## Shutdown
 
-Capture:
-- server startup/model-load output;
-- supervisor health/status response;
-- two inference responses and timings;
-- process RSS while idle and during inference;
-- graceful shutdown using Ctrl+C;
-- confirmation that both the supervisor and child process exit.
+Press Ctrl+C in the worker terminal. Verify that the worker and native child exit:
+
+```bash
+pgrep -af 'inference-worker|llama-server'
+```
+
+Stop the coordinator separately.
 
 ## Security and scope
 
-- Do not bind either service to `0.0.0.0`, a LAN interface, or a public address.
-- Do not expose the llama.cpp server directly to the internet.
-- This is a local trusted-lab experiment with no authentication.
-- Do not put activation payloads or model execution through the Go coordinator.
-- This milestone does not yet integrate the existing synthetic worker protocol.
-- A successful HTTP inference test proves a persistent native inference service, not model-parallel execution.
+- Keep coordinator, worker health API and native inference API bound to loopback for this local experiment.
+- The worker health API is not authenticated; it is loopback-only.
+- Never expose the native llama.cpp server directly to the internet.
+- A loopback inference endpoint advertised to the coordinator is valid only when both processes run on the same host.
+- Do not route prompts, activations, tensors or model execution through the coordinator.
+- Coordinator registration is discovery metadata, not a distributed inference scheduler.
+- No worker expiry, deregistration, request routing, model parallelism or multi-host networking is implemented in M1.
 
-## M1 acceptance for this slice
+## M1 acceptance checklist
 
-- [x] `llama-server` builds from the pinned runtime.
-- [x] Server starts and loads the selected model once.
-- [x] Native `/health` reports healthy.
-- [x] Chat-completion request succeeds.
-- [ ] Go supervisor builds and starts the native child process.
-- [ ] Supervisor health reports ready only while native runtime is healthy.
-- [ ] Two sequential inference requests succeed through the supervised process.
-- [ ] Supervisor shuts down the child cleanly.
-- [ ] Startup, request, memory and timing evidence is recorded.
+- [x] Pinned llama.cpp runtime builds.
+- [x] Native model loads and serves chat-completion requests.
+- [x] Go supervisor launches and shuts down the native child.
+- [x] Worker health reports runtime readiness.
+- [x] Coordinator supports compute and inference worker records.
+- [x] Inference capabilities persist in the coordinator file store.
+- [x] Inference worker registers after native runtime becomes ready.
+- [x] Worker sends periodic heartbeats.
+- [ ] Local end-to-end coordinator + worker verification on the lab machine.
+- [ ] `go test ./...` and `go vet ./...` after pulling this branch.
+
+M1 proves a supervised, registered, single-node inference worker. It does not prove multi-node scheduling or model-parallel inference.
