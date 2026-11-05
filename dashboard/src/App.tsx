@@ -67,7 +67,7 @@ export default function App() {
         fetch(`${base}/api/v1/workers`, { headers }),
         fetch(`${base}/api/v1/metrics/inference`, { headers }),
       ]);
-      if (!jobResponse.ok || !workerResponse.ok) {
+      if (!jobResponse.ok || !workerResponse.ok || !metricsResponse.ok) {
         throw new Error(`Coordinator returned ${jobResponse.status}/${workerResponse.status}`);
       }
       const [jobData, workerData, metricsData] = await Promise.all([
