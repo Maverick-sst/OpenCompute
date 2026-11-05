@@ -147,7 +147,7 @@ export default function App() {
     setInferenceOutput("");
     setError("");
     try {
-      const response = await fetch(`${apiBase.trim().replace(/\\/$/, "")}/api/v1/inference/workers/${worker.id}/chat/completions`, {
+      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}/api/v1/inference/workers/${worker.id}/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify({
