@@ -138,8 +138,14 @@ export default function App() {
 
   async function runInference(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const worker = availableInferenceWorkers.find((item) => item.id === selectedInferenceWorker) ?? availableInferenceWorkers[0];
-    if (!worker) {
+    const worker = selectedInferenceWorker
+      ? availableInferenceWorkers.find((item) => item.id === selectedInferenceWorker)
+      : undefined;
+    if (selectedInferenceWorker && !worker) {
+      setError("The selected inference worker is no longer healthy");
+      return;
+    }
+    if (availableInferenceWorkers.length === 0) {
       setError("No healthy inference worker advertises chat-completions");
       return;
     }
@@ -147,11 +153,11 @@ export default function App() {
     setInferenceOutput("");
     setError("");
     try {
-      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}/api/v1/inference/workers/${worker.id}/chat/completions`, {
+      const response = await fetch(`${apiBase.trim().replace(/\/$/, "")}${worker ? `/api/v1/inference/workers/${worker.id}/chat/completions` : "/api/v1/inference/chat/completions"}`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: worker.model,
+          model: worker?.model ?? "opencompute",
           messages: [{ role: "user", content: inferencePrompt }],
           temperature: 0,
           max_tokens: 128,
