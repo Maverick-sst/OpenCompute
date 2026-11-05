@@ -66,6 +66,18 @@ curl http://127.0.0.1:8080/api/v1/jobs/JOB_ID
 
 See [docs/WORKER-PROTOCOL.md](docs/WORKER-PROTOCOL.md) and [docs/V0-ROADMAP.md](docs/V0-ROADMAP.md). The dashboard runs with `cd dashboard && npm install && npm run dev`.
 
+## Distributed inference preview
+
+The inference path is experimental and separate from V0 synthetic jobs and V1 dataset processing.
+
+- M1: supervised llama.cpp inference worker with coordinator registration.
+- M2: request-level round-robin routing, worker-pinned sessions with explicit replay epochs, per-worker telemetry, and a concurrent benchmark harness.
+- M3: model-parallel execution across worker processes is **not yet implemented**. It remains gated on the M0 GGML RPC feasibility experiment and native-runtime evidence.
+
+See [M0 feasibility](experiments/inference/m0/README.md), [M1 worker setup](experiments/inference/m1/README.md), [M2 request routing and benchmark](experiments/inference/m2/README.md), and [M2.4 session semantics](experiments/inference/m2/SESSION-SEMANTICS.md).
+
+The M2 session registry and request metrics are currently in-memory. Session reassignment requires the client to resend the complete conversation history; native KV-cache transfer is not implemented. Keep the coordinator and worker gateways on a trusted private network with bearer-token authentication.
+
 ## Security limitations
 
 Set `OCF_API_TOKEN` to require a shared bearer token on all `/api/v1/*` routes; pass the same value to the worker through `OCF_API_TOKEN` or `-token`. The dashboard asks for this token in the browser and keeps it in memory only. Set `OCF_ALLOWED_ORIGINS` to a comma-separated list of allowed dashboard origins. For GitHub Pages, set the repository variable `OCF_API_BASE_URL` to the deployed coordinator URL and allow `https://maverick-sst.github.io` in the coordinator's CORS configuration. The coordinator refuses to bind beyond localhost without this token. This shared-token mechanism is a basic V0 access gate, not a production identity or multi-tenant trust system. TLS, signed worker credentials, workload sandboxing, resource enforcement, durable state, and provider trust are not implemented. Containers share the host kernel and are not a confidentiality boundary. Never send sensitive data to untrusted workers.
