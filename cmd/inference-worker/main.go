@@ -58,12 +58,12 @@ func main() {
 	}
 
 	sup := inference.NewSupervisor(inference.Config{
-		BinaryPath:   *binary,
-		ModelPath:    *model,
-		Host:         *nativeHost,
-		Port:         *nativePort,
-		Threads:      *threads,
-		ContextSize:  *ctxSize,
+		BinaryPath:  *binary,
+		ModelPath:   *model,
+		Host:        *nativeHost,
+		Port:        *nativePort,
+		Threads:     *threads,
+		ContextSize: *ctxSize,
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -146,10 +146,10 @@ func (a *workerAgent) register(ctx context.Context) (registration, error) {
 		"kind":               "inference",
 		"cpu_cores":          a.cores,
 		"memory_mb":          a.memoryMB,
-		"runtime":             "llama.cpp",
-		"model":               a.model,
+		"runtime":            "llama.cpp",
+		"model":              a.model,
 		"inference_endpoint": a.endpoint,
-		"operations":          []string{"chat-completions", "completion"},
+		"operations":         []string{"chat-completions", "completion"},
 	}
 
 	var out registration
