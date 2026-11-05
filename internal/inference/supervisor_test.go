@@ -5,7 +5,10 @@ import (
 )
 
 func TestLoopbackHost(t *testing.T) {
-	tests := []struct { host string; want bool }{
+	tests := []struct {
+		host string
+		want bool
+	}{
 		{"127.0.0.1", true},
 		{"::1", true},
 		{"localhost", true},
