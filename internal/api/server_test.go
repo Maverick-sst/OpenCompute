@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Maverick-sst/OpenCompute/internal/jobs"
+	"github.com/Maverick-sst/OpenCompute/internal/inference"
 )
 
 func TestCreateAndGetJob(t *testing.T) {
@@ -214,5 +215,95 @@ func TestRoundRobinInferenceRoutingReturnsUnavailableWithoutWorkers(t *testing.T
 	handler.ServeHTTP(result, req)
 	if result.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want %d body=%s", result.Code, http.StatusServiceUnavailable, result.Body.String())
+	}
+}
+
+func TestInferenceSessionPinsWorkerAndRecoversWithNewEpoch(t *testing.T) {
+	var firstCount, secondCount atomic.Int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		firstCount.Add(1)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"first"}}]}`))
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondCount.Add(1)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"second"}}]}`))
+	}))
+	defer second.Close()
+
+	store := jobs.NewMemoryStore()
+	firstWorker, err := store.RegisterInferenceWorker("first", 2, 2048, "llama.cpp", "test.gguf", first.URL, []string{"chat-completions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(store)
+	handler := server.Handler()
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/inference/sessions", nil)
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	var session inference.Session
+	if err := json.Unmarshal(created.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.WorkerID != firstWorker.ID || session.Epoch != 1 {
+		t.Fatalf("unexpected session assignment: %+v", session)
+	}
+
+	send := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/sessions/"+session.ID+"/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}]}`))
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, req)
+		return result
+	}
+	firstResponse := send()
+	if firstResponse.Code != http.StatusOK || firstResponse.Header().Get("X-OpenCompute-Session-Epoch") != "1" {
+		t.Fatalf("first request status=%d epoch=%q body=%s", firstResponse.Code, firstResponse.Header().Get("X-OpenCompute-Session-Epoch"), firstResponse.Body.String())
+	}
+	if firstCount.Load() != 1 {
+		t.Fatalf("first worker requests=%d want 1", firstCount.Load())
+	}
+
+	secondWorker, err := store.RegisterInferenceWorker("second", 2, 2048, "llama.cpp", "test.gguf", second.URL, []string{"chat-completions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.sessions.InvalidateWorker(firstWorker.ID)
+	recovered := send()
+	if recovered.Code != http.StatusOK || recovered.Header().Get("X-OpenCompute-Session-Epoch") != "2" {
+		t.Fatalf("recovery status=%d epoch=%q body=%s", recovered.Code, recovered.Header().Get("X-OpenCompute-Session-Epoch"), recovered.Body.String())
+	}
+	got, err := server.sessions.Get(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkerID != secondWorker.ID || got.Reassignments != 1 {
+		t.Fatalf("session was not reassigned: %+v", got)
+	}
+	if secondCount.Load() != 1 {
+		t.Fatalf("second worker requests=%d want 1", secondCount.Load())
+	}
+}
+
+func TestInferenceSessionRequiresHealthyWorker(t *testing.T) {
+	handler := NewServer(jobs.NewMemoryStore()).Handler()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inference/sessions", nil)
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if result.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want %d", result.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestInferenceSessionNotFound(t *testing.T) {
+	handler := NewServer(jobs.NewMemoryStore()).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/inference/sessions/missing", nil)
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, req)
+	if result.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want %d", result.Code, http.StatusNotFound)
 	}
 }
